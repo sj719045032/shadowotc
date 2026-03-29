@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { fetchAllOrders, type OrderData, getContract, CONTRACT_ADDRESS } from "../lib/contract";
 import { useWallet } from "../App";
-import { decryptValues } from "../lib/fhevm";
+import { decryptValues, unscaleFromFHE } from "../lib/fhevm";
 
 type DecryptedOrder = OrderData & {
   decryptedPrice?: number;
@@ -63,8 +63,8 @@ export default function MyTrades() {
           o.id === orderId
             ? {
                 ...o,
-                decryptedPrice: Number(values[0] || 0n),
-                decryptedAmount: Number(values[1] || 0n),
+                decryptedPrice: unscaleFromFHE(Number(values[0] || 0n)),
+                decryptedAmount: unscaleFromFHE(Number(values[1] || 0n)),
                 decrypting: false,
                 justDecrypted: true,
               }

@@ -16,6 +16,18 @@ export async function getFhevmInstance(): Promise<FhevmInstance> {
   return instance;
 }
 
+// Scale factor: all encrypted values are multiplied by this to avoid decimals
+// Price 200.5 → 2005000, Amount 0.01 → 100
+export const FHE_SCALE = 10000;
+
+export function scaleForFHE(value: number): number {
+  return Math.round(value * FHE_SCALE);
+}
+
+export function unscaleFromFHE(value: number): number {
+  return value / FHE_SCALE;
+}
+
 export async function encryptInputs(
   userAddress: string,
   price: number,
@@ -26,8 +38,9 @@ export async function encryptInputs(
     CONTRACT_ADDRESS,
     userAddress,
   );
-  input.add64(price);
-  input.add64(amount);
+  // Scale to integers for FHE (euint64 only supports integers)
+  input.add64(scaleForFHE(price));
+  input.add64(scaleForFHE(amount));
   const encrypted = await input.encrypt();
   return encrypted;
 }
