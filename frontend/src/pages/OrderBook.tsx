@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { fetchAllOrders, type OrderData, getContract, approveUSDC, parseUnits } from "../lib/contract";
+import { fetchAllOrders, type OrderData, getContract, CONTRACT_ADDRESS, approveUSDC, parseUnits } from "../lib/contract";
 import { useWallet } from "../App";
-import { encryptInputs } from "../lib/fhevm";
+import { encryptInputs, decryptValues, unscaleFromFHE } from "../lib/fhevm";
 
 const STATUS_LABELS = ["Open", "Filled", "Cancelled"];
 
@@ -10,10 +10,13 @@ type FilterSide = "all" | "buy" | "sell";
 type FilterStatus = "all" | "0" | "1" | "2";
 
 type FillingOrder = OrderData & {
-  takerPrice: string;
-  takerAmount: string;
-  payAmount: string;
-  receiveAmount: string;
+  // Decrypted maker terms (null until decrypt succeeds)
+  makerPrice: number | null;
+  makerAmount: number | null;
+  decrypting: boolean;
+  decryptError: string;
+  // Taker's fill input
+  fillAmount: string;
 };
 
 export default function OrderBook() {
@@ -65,21 +68,45 @@ export default function OrderBook() {
     setFillError("");
     setFillingOrder({
       ...order,
-      takerPrice: "",
-      takerAmount: "",
-      payAmount: "",
-      receiveAmount: "",
+      makerPrice: null,
+      makerAmount: null,
+      decrypting: false,
+      decryptError: "",
+      fillAmount: "",
     });
   }
 
-  async function handleFillSubmit() {
+  async function handleDecryptOrder() {
     if (!fillingOrder || !account) return;
+    try {
+      setFillingOrder((prev) => prev ? { ...prev, decrypting: true, decryptError: "" } : prev);
+      const contract = await getContract();
+      const encPrice = await contract.getPrice(fillingOrder.id);
+      const encAmount = await contract.getAmount(fillingOrder.id);
+      const results = await decryptValues(
+        [
+          { handle: encPrice.toString(), contractAddress: CONTRACT_ADDRESS },
+          { handle: encAmount.toString(), contractAddress: CONTRACT_ADDRESS },
+        ],
+        account,
+      );
+      const values = [...results.values()];
+      const price = unscaleFromFHE(Number(values[0] || 0n));
+      const amount = unscaleFromFHE(Number(values[1] || 0n));
+      setFillingOrder((prev) => prev ? { ...prev, makerPrice: price, makerAmount: amount, fillAmount: String(amount), decrypting: false } : prev);
+    } catch (err) {
+      console.error("Decrypt failed:", err);
+      setFillingOrder((prev) => prev ? { ...prev, decrypting: false, decryptError: "Access denied. Ask the maker to grant you access first." } : prev);
+    }
+  }
 
-    const priceNum = Number(fillingOrder.takerPrice);
-    const amountNum = Number(fillingOrder.takerAmount);
+  async function handleFillSubmit() {
+    if (!fillingOrder || !account || !fillingOrder.makerPrice || !fillingOrder.fillAmount) return;
 
-    if (!priceNum || !amountNum) {
-      setFillError("Price and amount must be greater than 0");
+    const fillAmt = Number(fillingOrder.fillAmount);
+    const price = fillingOrder.makerPrice;
+    if (!fillAmt || !price) {
+      setFillError("Fill amount must be greater than 0");
       return;
     }
 
@@ -87,12 +114,13 @@ export default function OrderBook() {
       setFilling(fillingOrder.id);
       setFillError("");
 
-      const encrypted = await encryptInputs(account, priceNum, amountNum);
+      // Encrypt taker's price (= maker's price to ensure match) and fill amount
+      const encrypted = await encryptInputs(account, price, fillAmt);
       const contract = await getContract(true);
 
       if (fillingOrder.isBuy) {
-        // Filling a BUY order: taker sends ETH
-        const ethAmount = fillingOrder.payAmount || "0";
+        // Filling a BUY order: taker sends ETH, receives USDC
+        const ethAmount = String(fillAmt);
         const tx = await contract.fillOrder(
           fillingOrder.id,
           encrypted.handles[0],
@@ -104,8 +132,8 @@ export default function OrderBook() {
         );
         await tx.wait();
       } else {
-        // Filling a SELL order: taker sends USDC
-        const usdcAmount = fillingOrder.payAmount || "0";
+        // Filling a SELL order: taker sends USDC, receives ETH
+        const usdcAmount = String(fillAmt * price);
         if (Number(usdcAmount) > 0) {
           await approveUSDC(usdcAmount);
         }
@@ -189,137 +217,114 @@ export default function OrderBook() {
 
             {/* Form */}
             <div className="px-6 pb-6 space-y-4">
-              {/* Encrypted price input */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                  Your Price (encrypted)
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={fillingOrder.takerPrice}
-                    onChange={(e) => setFillingOrder({ ...fillingOrder, takerPrice: e.target.value })}
-                    placeholder="0.00"
-                    min="1"
-                    className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-xs text-slate-500">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                    FHE
+              {/* Step 1: Decrypt order details */}
+              {fillingOrder.makerPrice === null ? (
+                <div className="space-y-4">
+                  <div className="bg-[#0d1117] border border-[#1e293b] rounded-xl p-4 text-center">
+                    <div className="text-3xl mb-2">🔒</div>
+                    <div className="text-sm text-slate-300 mb-1">Order details are encrypted</div>
+                    <div className="text-xs text-slate-500">Decrypt to see price and amount before filling</div>
                   </div>
-                </div>
-              </div>
 
-              {/* Encrypted amount input */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                  Your Amount (encrypted)
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={fillingOrder.takerAmount}
-                    onChange={(e) => setFillingOrder({ ...fillingOrder, takerAmount: e.target.value })}
-                    placeholder="0"
-                    min="1"
-                    className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-xs text-slate-500">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                    FHE
-                  </div>
-                </div>
-              </div>
+                  {fillingOrder.decryptError && (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-400 flex items-start gap-2">
+                      <span className="text-lg">🚫</span>
+                      <div>
+                        <div className="font-medium">Access Denied</div>
+                        <div className="text-xs text-red-400/70 mt-0.5">Ask the maker to grant you access via "Grant Access" in their My Trades page.</div>
+                      </div>
+                    </div>
+                  )}
 
-              {/* Deposit / payment fields based on order side */}
-              {fillingOrder.isBuy ? (
-                <>
-                  {/* Filling a BUY order: taker pays ETH, receives USDC */}
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                      ETH to pay
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={fillingOrder.payAmount}
-                        onChange={(e) => setFillingOrder({ ...fillingOrder, payAmount: e.target.value })}
-                        placeholder="0.00"
-                        step="0.001"
-                        min="0"
-                        className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">ETH</span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                      USDC to receive
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={fillingOrder.receiveAmount}
-                        onChange={(e) => setFillingOrder({ ...fillingOrder, receiveAmount: e.target.value })}
-                        placeholder="0"
-                        min="0"
-                        className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-slate-400 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">USDC</span>
-                    </div>
-                    <p className="text-[10px] text-slate-600 mt-1">Informational only -- actual settlement is computed on-chain.</p>
-                  </div>
-                </>
+                  <button
+                    onClick={handleDecryptOrder}
+                    disabled={fillingOrder.decrypting}
+                    className="w-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 hover:border-blue-500/40 text-blue-400 py-3 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
+                  >
+                    {fillingOrder.decrypting ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full spinner" />
+                        Decrypting...
+                      </span>
+                    ) : "🔓 Decrypt Order Details"}
+                  </button>
+                </div>
               ) : (
-                <>
-                  {/* Filling a SELL order: taker pays USDC, receives ETH */}
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                      USDC to pay
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={fillingOrder.payAmount}
-                        onChange={(e) => setFillingOrder({ ...fillingOrder, payAmount: e.target.value })}
-                        placeholder="0"
-                        min="0"
-                        className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">USDC</span>
+                <div className="space-y-4">
+                  {/* Decrypted maker terms */}
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+                    <div className="text-xs text-emerald-400/80 uppercase tracking-wider font-medium mb-3">Maker's Terms (Decrypted)</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-[10px] text-slate-500 mb-0.5">Price</div>
+                        <div className="text-lg font-bold text-white">${fillingOrder.makerPrice.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-slate-500 mb-0.5">Amount</div>
+                        <div className="text-lg font-bold text-white">{fillingOrder.makerAmount} {fillingOrder.tokenPair.split("/")[0]}</div>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
-                      ETH to receive
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={fillingOrder.receiveAmount}
-                        onChange={(e) => setFillingOrder({ ...fillingOrder, receiveAmount: e.target.value })}
-                        placeholder="0.00"
-                        step="0.001"
-                        min="0"
-                        className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-slate-400 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">ETH</span>
-                    </div>
-                    <p className="text-[10px] text-slate-600 mt-1">Informational only -- actual settlement is computed on-chain.</p>
-                  </div>
-                </>
-              )}
 
-              {/* Info banner */}
-              <div className="flex items-start gap-2.5 bg-blue-500/5 border border-blue-500/10 rounded-lg p-3">
-                <svg className="mt-0.5 flex-shrink-0" width="14" height="14" viewBox="0 0 32 32" fill="none">
-                  <path d="M16 2L4 8v8c0 7.18 5.12 13.9 12 16 6.88-2.1 12-8.82 12-16V8L16 2z" fill="#3b82f6" fillOpacity="0.2" stroke="#3b82f6" strokeWidth="1.5"/>
-                  <path d="M12 16l3 3 5-6" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                <span className="text-xs text-blue-300/70 leading-relaxed">
-                  Your price and amount are encrypted with FHE. The contract matches orders confidentially.
-                </span>
-              </div>
+                  {/* Fill amount */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">
+                      Fill Amount ({fillingOrder.tokenPair.split("/")[0]})
+                    </label>
+                    <input
+                      type="number"
+                      value={fillingOrder.fillAmount}
+                      onChange={(e) => setFillingOrder({ ...fillingOrder, fillAmount: e.target.value })}
+                      placeholder="0"
+                      min="0.000001"
+                      step="any"
+                      max={fillingOrder.makerAmount || undefined}
+                      className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 transition-all duration-200"
+                    />
+                  </div>
+
+                  {/* Auto-calculated summary */}
+                  {Number(fillingOrder.fillAmount) > 0 && (
+                    <div className="bg-[#0d1117] border border-[#1e293b] rounded-xl p-4 space-y-2">
+                      <div className="text-xs text-slate-500 uppercase tracking-wider font-medium mb-2">Settlement Preview</div>
+                      {fillingOrder.isBuy ? (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-400">You pay</span>
+                            <span className="text-red-400 font-medium">{Number(fillingOrder.fillAmount).toLocaleString()} ETH</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-400">You receive</span>
+                            <span className="text-emerald-400 font-medium">{(Number(fillingOrder.fillAmount) * fillingOrder.makerPrice).toLocaleString()} USDC</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-400">You pay</span>
+                            <span className="text-red-400 font-medium">{(Number(fillingOrder.fillAmount) * fillingOrder.makerPrice).toLocaleString()} USDC</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-400">You receive</span>
+                            <span className="text-emerald-400 font-medium">{Number(fillingOrder.fillAmount).toLocaleString()} ETH</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* FHE info */}
+                  <div className="flex items-start gap-2.5 bg-blue-500/5 border border-blue-500/10 rounded-lg p-3">
+                    <svg className="mt-0.5 flex-shrink-0" width="14" height="14" viewBox="0 0 32 32" fill="none">
+                      <path d="M16 2L4 8v8c0 7.18 5.12 13.9 12 16 6.88-2.1 12-8.82 12-16V8L16 2z" fill="#3b82f6" fillOpacity="0.2" stroke="#3b82f6" strokeWidth="1.5"/>
+                      <path d="M12 16l3 3 5-6" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    <span className="text-xs text-blue-300/70 leading-relaxed">
+                      Your bid will be encrypted with FHE. The contract verifies price match on encrypted data.
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Error */}
               {fillError && (
@@ -329,13 +334,14 @@ export default function OrderBook() {
                 </div>
               )}
 
-              {/* Submit button */}
+              {/* Submit button - only shown after decrypt */}
+              {fillingOrder.makerPrice !== null && (
               <button
                 onClick={async () => {
                   if (!account) { await connect(); return; }
                   handleFillSubmit();
                 }}
-                disabled={filling === fillingOrder.id || !fillingOrder.takerPrice || !fillingOrder.takerAmount}
+                disabled={filling === fillingOrder.id || !fillingOrder.fillAmount || Number(fillingOrder.fillAmount) <= 0}
                 className={`w-full py-3.5 rounded-xl font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                   fillingOrder.isBuy
                     ? "bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white shadow-[0_0_20px_rgba(239,68,68,0.2)]"
@@ -363,6 +369,7 @@ export default function OrderBook() {
                   </span>
                 )}
               </button>
+              )}
             </div>
           </div>
         </div>
