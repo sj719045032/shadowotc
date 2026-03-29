@@ -6,6 +6,7 @@ import App from "./App";
 import CreateOrder from "./pages/CreateOrder";
 import OrderBook from "./pages/OrderBook";
 import MyTrades from "./pages/MyTrades";
+import OrderDetail from "./pages/OrderDetail";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -15,6 +16,7 @@ createRoot(document.getElementById("root")!).render(
           <Route index element={<OrderBook />} />
           <Route path="create" element={<CreateOrder />} />
           <Route path="trades" element={<MyTrades />} />
+          <Route path="order/:id" element={<OrderDetail />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -110,7 +110,7 @@ export default function MyTrades() {
   }
 
   function handleShareLink(orderId: number) {
-    const url = `${window.location.origin}/?order=${orderId}`;
+    const url = `${window.location.origin}/order/${orderId}`;
     navigator.clipboard.writeText(url).then(() => {
       setCopiedId(orderId);
       setTimeout(() => setCopiedId(null), 2000);
@@ -265,7 +265,8 @@ export default function MyTrades() {
           {orders.map((o, idx) => {
             const isExpanded = expandedId === o.id;
             const isMaker = o.maker.toLowerCase() === account.toLowerCase();
-            const deposit = o.isBuy ? `${Number(o.tokenDeposit).toLocaleString()} USDC` : `${Number(o.ethDeposit).toFixed(4)} ETH`;
+            const _unused = o.tokenDeposit; // deposit info only in expanded view
+            void _unused;
             return (
             <div key={o.id} className={`${idx > 0 ? "border-t border-[#1e293b]" : ""} row-enter`} style={{ animationDelay: `${idx * 40}ms` }}>
               {/* Compact row */}
@@ -276,7 +277,6 @@ export default function MyTrades() {
                 <span className="font-mono text-xs text-slate-500 w-8">#{o.id}</span>
                 <span className="font-medium text-sm text-slate-200 w-24">{o.tokenPair}</span>
                 <span className={`text-xs font-bold w-12 ${o.isBuy ? "text-emerald-400" : "text-red-400"}`}>{o.isBuy ? "BUY" : "SELL"}</span>
-                <span className="text-xs text-slate-400 w-28">{deposit}</span>
                 <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${
                   o.status === 0 ? "bg-emerald-500/10 text-emerald-400" : o.status === 1 ? "bg-blue-500/10 text-blue-400" : "bg-slate-500/10 text-slate-500"
                 }`}>

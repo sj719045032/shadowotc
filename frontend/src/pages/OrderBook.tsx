@@ -511,7 +511,6 @@ export default function OrderBook() {
                     <th className="text-left px-4 py-3 font-semibold">Side</th>
                     <th className="text-left px-4 py-3 font-semibold">Price</th>
                     <th className="text-left px-4 py-3 font-semibold">Amount</th>
-                    <th className="text-left px-4 py-3 font-semibold">Deposit</th>
                     <th className="text-left px-4 py-3 font-semibold">Maker</th>
                     <th className="text-left px-4 py-3 font-semibold">Status</th>
                     <th className="text-left px-4 py-3 font-semibold">Time</th>
@@ -559,13 +558,6 @@ export default function OrderBook() {
                           </svg>
                           Encrypted
                         </span>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-400">
-                        {o.isBuy ? (
-                          <span>{Number(o.tokenRemaining).toLocaleString()} <span className="text-slate-600">USDC</span></span>
-                        ) : (
-                          <span>{Number(o.ethRemaining).toFixed(4)} <span className="text-slate-600">ETH</span></span>
-                        )}
                       </td>
                       <td className="px-4 py-3.5 font-mono text-xs text-slate-500">
                         {o.maker.slice(0, 6)}...{o.maker.slice(-4)}
@@ -645,12 +637,6 @@ export default function OrderBook() {
                     <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
                     Amount Encrypted
                   </span>
-                </div>
-                <div className="text-xs text-slate-500 mb-2">
-                  Deposit: {o.isBuy
-                    ? `${Number(o.tokenRemaining).toLocaleString()} USDC`
-                    : `${Number(o.ethRemaining).toFixed(4)} ETH`
-                  }
                 </div>
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span className="font-mono">{o.maker.slice(0, 6)}...{o.maker.slice(-4)}</span>
