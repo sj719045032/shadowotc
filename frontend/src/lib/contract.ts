@@ -49,8 +49,16 @@ export async function getUSDCBalance(address: string): Promise<string> {
 }
 
 export async function approveUSDC(amount: string): Promise<void> {
-  const usdc = await getUSDC(true);
-  const tx = await usdc.approve(CONTRACT_ADDRESS, parseUnits(amount, 6));
+  const signer = await getSigner();
+  const address = await signer.getAddress();
+  const usdc = await getUSDC();
+  const needed = parseUnits(amount, 6);
+  const allowance = await usdc.allowance(address, CONTRACT_ADDRESS);
+  // Skip if already authorized enough
+  if (allowance >= needed) return;
+  // Only approve the needed amount
+  const usdcWithSigner = await getUSDC(true);
+  const tx = await usdcWithSigner.approve(CONTRACT_ADDRESS, needed);
   await tx.wait();
 }
 
