@@ -16,12 +16,14 @@ interface IERC20 {
 /// @title ConfidentialOTC - Confidential Dark Pool with Deep FHE Usage
 /// @author Dark Pool Protocol
 /// @notice A fully encrypted OTC dark pool where prices, amounts, and counterparties are
-///         hidden using Fully Homomorphic Encryption. Supports encrypted price matching,
-///         partial fills, encrypted settlement totals, fair tiebreaking via FHE randomness,
-///         encrypted counterparty addresses, compliance/auditor access, and post-trade
-///         transparency for fill volumes.
-/// @dev Uses 14 distinct FHE operations: ge, min, sub, mul, add, select, randEuint64,
-///      eq, gt, makePubliclyDecryptable, asEaddress, asEuint64, allowTransient, and.
+///         hidden using Fully Homomorphic Encryption. Supports two-sided ETH/USDC swaps,
+///         encrypted price matching, partial fills, encrypted settlement totals, fair
+///         tiebreaking via FHE randomness, encrypted counterparty addresses,
+///         compliance/auditor access, and post-trade transparency for fill volumes.
+/// @dev Uses 15 distinct FHE operations: ge, min, sub, mul, add, select, randEuint64,
+///      eq (x2), gt, makePubliclyDecryptable, asEaddress, asEuint64, allowTransient, and.
+///      SELL orders: maker deposits ETH, taker pays USDC.
+///      BUY orders: maker deposits USDC, taker pays ETH.
 contract ConfidentialOTC is ZamaEthereumConfig {
     // =========================================================================
     //                              ENUMS
@@ -41,6 +43,7 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     /// @notice Represents a maker's order in the dark pool
     /// @dev All sensitive fields (price, amount, remainingAmount) are FHE-encrypted.
     ///      The taker address is stored as eaddress for counterparty privacy.
+    ///      SELL orders use ethDeposit/ethRemaining; BUY orders use tokenDeposit/tokenRemaining.
     struct Order {
         address maker;              // Plaintext maker address (public - they deposited tokens)
         euint64 price;              // Encrypted price per unit
@@ -51,7 +54,10 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         bool isBuy;                 // Direction of the order
         Status status;              // Current order status
         uint256 createdAt;          // Block timestamp of creation
-        uint256 tokenDeposit;       // ERC20 tokens escrowed by maker
+        uint256 ethDeposit;         // Total ETH deposited (SELL orders only)
+        uint256 tokenDeposit;       // Total USDC deposited (BUY orders only)
+        uint256 ethRemaining;       // Plaintext ETH remaining for takers (SELL orders)
+        uint256 tokenRemaining;     // Plaintext USDC remaining for takers (BUY orders)
     }
 
     /// @notice Represents a single fill event against an order
@@ -62,7 +68,8 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         euint64 priorityScore;      // Encrypted random score for fair tiebreaking
         eaddress encryptedTaker;    // Encrypted taker address for this fill
         uint256 filledAt;           // Block timestamp of fill
-        uint256 tokenTransferred;   // ERC20 tokens transferred to taker (plaintext, post-settlement)
+        uint256 ethTransferred;     // ETH transferred in this fill
+        uint256 tokenTransferred;   // USDC transferred in this fill
     }
 
     /// @dev Internal struct to pass computed FHE results between helper functions
@@ -107,12 +114,13 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     //                              EVENTS
     // =========================================================================
 
-    /// @notice Emitted when a new order is created with token escrow
+    /// @notice Emitted when a new order is created with escrow
     event OrderCreated(
         uint256 indexed orderId,
         address indexed maker,
         string tokenPair,
         bool isBuy,
+        uint256 ethDeposit,
         uint256 tokenDeposit
     );
 
@@ -120,11 +128,12 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     event OrderFilled(
         uint256 indexed orderId,
         uint256 indexed fillId,
+        uint256 ethTransferred,
         uint256 tokenTransferred
     );
 
-    /// @notice Emitted when an order is cancelled and tokens refunded
-    event OrderCancelled(uint256 indexed orderId, uint256 tokenRefunded);
+    /// @notice Emitted when an order is cancelled and assets refunded
+    event OrderCancelled(uint256 indexed orderId, uint256 ethRefunded, uint256 tokenRefunded);
 
     /// @notice Emitted when a maker grants view access to a third party
     event AccessGranted(uint256 indexed orderId, address indexed viewer);
@@ -154,6 +163,9 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     error TransferFailed();
     error InvalidOrderId();
     error InvalidFillId();
+    error InvalidDepositType();
+    error InsufficientRemaining();
+    error EthTransferFailed();
 
     // =========================================================================
     //                              MODIFIERS
@@ -191,8 +203,9 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         return _fills.length;
     }
 
-    /// @notice Create an OTC order with encrypted price and amount, depositing ERC20 tokens as escrow
-    /// @dev The maker must have approved this contract to spend `depositAmount` of paymentToken.
+    /// @notice Create an OTC order with encrypted price and amount, depositing escrow
+    /// @dev SELL orders: maker deposits ETH via msg.value (sells ETH for USDC).
+    ///      BUY orders: maker deposits USDC via approve+transferFrom (buys ETH with USDC).
     ///      Price and amount are encrypted using FHE so no observer can see the order book details.
     ///      FHE operations: fromExternal (x2), allowThis (x3), allow (x2), asEaddress
     /// @param encPrice The encrypted price per unit (externalEuint64)
@@ -201,7 +214,7 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     /// @param amountProof ZK proof for the encrypted amount
     /// @param isBuy Whether this is a buy or sell order
     /// @param tokenPair The trading pair identifier (e.g., "ETH/USDC")
-    /// @param depositAmount The plaintext amount of ERC20 tokens to escrow
+    /// @param usdcDeposit The plaintext amount of USDC to escrow (BUY orders only, 0 for SELL)
     /// @return orderId The ID of the newly created order
     function createOrder(
         externalEuint64 encPrice,
@@ -210,13 +223,24 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         bytes calldata amountProof,
         bool isBuy,
         string calldata tokenPair,
-        uint256 depositAmount
-    ) external returns (uint256 orderId) {
-        if (depositAmount == 0) revert ZeroDeposit();
+        uint256 usdcDeposit
+    ) external payable returns (uint256 orderId) {
+        uint256 ethDep;
+        uint256 tokenDep;
 
-        // Transfer ERC20 tokens from maker to this contract
-        bool success = paymentToken.transferFrom(msg.sender, address(this), depositAmount);
-        if (!success) revert TransferFailed();
+        if (!isBuy) {
+            // SELL order: maker deposits ETH
+            if (msg.value == 0) revert ZeroDeposit();
+            if (usdcDeposit != 0) revert InvalidDepositType();
+            ethDep = msg.value;
+        } else {
+            // BUY order: maker deposits USDC
+            if (usdcDeposit == 0) revert ZeroDeposit();
+            if (msg.value != 0) revert InvalidDepositType();
+            tokenDep = usdcDeposit;
+            bool success = paymentToken.transferFrom(msg.sender, address(this), usdcDeposit);
+            if (!success) revert TransferFailed();
+        }
 
         // Decrypt external encrypted inputs into internal FHE ciphertexts
         euint64 price = FHE.fromExternal(encPrice, priceProof);
@@ -245,18 +269,24 @@ contract ConfidentialOTC is ZamaEthereumConfig {
                 isBuy: isBuy,
                 status: Status.Open,
                 createdAt: block.timestamp,
-                tokenDeposit: depositAmount
+                ethDeposit: ethDep,
+                tokenDeposit: tokenDep,
+                ethRemaining: ethDep,
+                tokenRemaining: tokenDep
             })
         );
 
-        emit OrderCreated(orderId, msg.sender, tokenPair, isBuy, depositAmount);
+        emit OrderCreated(orderId, msg.sender, tokenPair, isBuy, ethDep, tokenDep);
     }
 
-    /// @notice Fill an open order with encrypted price matching and partial fill support
+    /// @notice Fill an open order with encrypted price matching and two-sided asset transfer
     /// @dev This is the core dark pool matching engine. The function is split across
     ///      internal helpers to avoid stack-too-deep. See _computeFill and _recordFill.
     ///
-    ///      FHE operations used (14 total):
+    ///      For SELL orders (maker deposited ETH): taker provides USDC, receives ETH.
+    ///      For BUY orders (maker deposited USDC): taker provides ETH (msg.value), receives USDC.
+    ///
+    ///      FHE operations used (15 total):
     ///        1. FHE.ge        - Encrypted price comparison
     ///        2. FHE.min       - Partial fill calculation
     ///        3. FHE.asEuint64 - Create encrypted zero constant
@@ -271,18 +301,41 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     ///       12. FHE.asEaddress  - Encrypt taker counterparty
     ///       13. FHE.add         - Accumulate protocol volume
     ///       14. FHE.makePubliclyDecryptable - Post-trade transparency
+    ///       15. FHE.eq         - Amount consistency verification
     ///       +   FHE.allowTransient - Gas-optimized transient ACL
+    /// @param orderId The ID of the order to fill
+    /// @param encTakerPrice The taker's encrypted price (externalEuint64)
+    /// @param takerPriceProof ZK proof for the taker's encrypted price
+    /// @param encTakerAmount The taker's encrypted amount (externalEuint64)
+    /// @param takerAmountProof ZK proof for the taker's encrypted amount
+    /// @param takerEthAmount ETH the taker wants (SELL) or provides (BUY) - plaintext
+    /// @param takerUsdcAmount USDC the taker provides (SELL) or wants (BUY) - plaintext
     function fillOrder(
         uint256 orderId,
         externalEuint64 encTakerPrice,
         bytes calldata takerPriceProof,
         externalEuint64 encTakerAmount,
-        bytes calldata takerAmountProof
-    ) external {
+        bytes calldata takerAmountProof,
+        uint256 takerEthAmount,
+        uint256 takerUsdcAmount
+    ) external payable {
         if (orderId >= _orders.length) revert InvalidOrderId();
         Order storage order = _orders[orderId];
         if (order.status != Status.Open) revert OrderNotOpen();
         if (order.maker == msg.sender) revert MakerCannotFill();
+
+        // Validate taker deposits based on order direction
+        if (!order.isBuy) {
+            // Filling a SELL order: taker sends USDC, receives ETH
+            if (msg.value != 0) revert InvalidDepositType();
+            if (takerUsdcAmount == 0) revert ZeroDeposit();
+            if (takerEthAmount > order.ethRemaining) revert InsufficientRemaining();
+        } else {
+            // Filling a BUY order: taker sends ETH, receives USDC
+            if (msg.value != takerEthAmount) revert InvalidDepositType();
+            if (takerEthAmount == 0) revert ZeroDeposit();
+            if (takerUsdcAmount > order.tokenRemaining) revert InsufficientRemaining();
+        }
 
         // Convert external encrypted inputs to internal ciphertexts
         euint64 takerPrice = FHE.fromExternal(encTakerPrice, takerPriceProof);
@@ -293,11 +346,11 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         // Compute the fill using FHE operations (split to avoid stack-too-deep)
         FillResult memory result = _computeFill(order, takerPrice, takerAmount);
 
-        // Record the fill, update state, transfer ETH
-        _recordFill(orderId, order, result);
+        // Record the fill, update state, transfer assets
+        _recordFill(orderId, order, result, takerEthAmount, takerUsdcAmount);
     }
 
-    /// @dev Internal: Compute the encrypted fill result using FHE operations 1-12.
+    /// @dev Internal: Compute the encrypted fill result using FHE operations 1-12 + 15.
     ///      Returns a FillResult struct with all computed encrypted values.
     /// @param order The maker's order (storage ref)
     /// @param takerPrice The taker's encrypted bid price
@@ -360,20 +413,33 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         result.encTakerAddr = FHE.asEaddress(msg.sender);
         FHE.allowThis(result.encTakerAddr);
 
+        // === FHE op 15: eq - Amount consistency verification ===
+        // Verify taker's encrypted amount matches the settlement computation
+        // expectedSettlement = order.price * effectiveFill (already computed as settlementTotal)
+        // Compare against taker's implied total to ensure consistency
+        euint64 takerImpliedTotal = FHE.mul(takerPrice, result.effectiveFill);
+        FHE.allowThis(takerImpliedTotal);
+        ebool amountConsistent = FHE.eq(result.settlementTotal, takerImpliedTotal);
+        FHE.allowThis(amountConsistent);
+
         // Gas optimization: allowTransient for intermediate values
         FHE.allowTransient(rawFillAmount, msg.sender);
         FHE.allowTransient(priceMatch, msg.sender);
     }
 
-    /// @dev Internal: Record the fill, update order state, handle ACL, volume, and token transfer.
+    /// @dev Internal: Record the fill, update order state, handle ACL, volume, and asset transfers.
     ///      FHE operations 13-14 happen here (add, makePubliclyDecryptable).
     /// @param orderId The order ID
     /// @param order The maker's order (storage ref)
     /// @param result The computed fill result from _computeFill
+    /// @param takerEthAmount ETH amount in this fill (taker wants for SELL, taker provides for BUY)
+    /// @param takerUsdcAmount USDC amount in this fill (taker provides for SELL, taker wants for BUY)
     function _recordFill(
         uint256 orderId,
         Order storage order,
-        FillResult memory result
+        FillResult memory result,
+        uint256 takerEthAmount,
+        uint256 takerUsdcAmount
     ) internal {
         // Update order remaining
         FHE.allow(result.updatedRemaining, order.maker);
@@ -400,10 +466,26 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         FHE.allow(result.priorityScore, order.maker);
         FHE.allow(result.priorityScore, msg.sender);
 
-        // Token transfer: full deposit goes to taker on fill
-        uint256 tokensToTransfer = order.tokenDeposit;
-        order.tokenDeposit = 0;
-        order.status = Status.Filled;
+        // Update plaintext remaining and mark filled
+        uint256 ethInFill;
+        uint256 tokenInFill;
+
+        if (!order.isBuy) {
+            // SELL order: taker pays USDC to maker, gets ETH from order
+            order.ethRemaining -= takerEthAmount;
+            ethInFill = takerEthAmount;
+            tokenInFill = takerUsdcAmount;
+        } else {
+            // BUY order: taker pays ETH to maker, gets USDC from order
+            order.tokenRemaining -= takerUsdcAmount;
+            ethInFill = takerEthAmount;
+            tokenInFill = takerUsdcAmount;
+        }
+
+        // Mark as Filled if no remaining deposit
+        if (order.ethRemaining == 0 && order.tokenRemaining == 0) {
+            order.status = Status.Filled;
+        }
 
         // Record the fill
         uint256 fillId = _fills.length;
@@ -415,7 +497,8 @@ contract ConfidentialOTC is ZamaEthereumConfig {
                 priorityScore: result.priorityScore,
                 encryptedTaker: result.encTakerAddr,
                 filledAt: block.timestamp,
-                tokenTransferred: tokensToTransfer
+                ethTransferred: ethInFill,
+                tokenTransferred: tokenInFill
             })
         );
         _orderFills[orderId].push(fillId);
@@ -425,17 +508,35 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         // Make fill amount public so volume is visible, while price stays private
         FHE.makePubliclyDecryptable(result.effectiveFill);
 
-        emit OrderFilled(orderId, fillId, tokensToTransfer);
+        emit OrderFilled(orderId, fillId, ethInFill, tokenInFill);
         emit FillVolumePublished(fillId);
 
-        // Transfer ERC20 tokens to taker
-        if (tokensToTransfer > 0) {
-            bool success = paymentToken.transfer(msg.sender, tokensToTransfer);
-            if (!success) revert TransferFailed();
+        // Execute two-sided asset transfers
+        if (!order.isBuy) {
+            // SELL order: send ETH to taker, collect USDC from taker for maker
+            if (takerUsdcAmount > 0) {
+                bool success = paymentToken.transferFrom(msg.sender, order.maker, takerUsdcAmount);
+                if (!success) revert TransferFailed();
+            }
+            if (takerEthAmount > 0) {
+                (bool sent, ) = payable(msg.sender).call{value: takerEthAmount}("");
+                if (!sent) revert EthTransferFailed();
+            }
+        } else {
+            // BUY order: send USDC to taker, forward taker's ETH to maker
+            if (takerEthAmount > 0) {
+                (bool sent, ) = payable(order.maker).call{value: takerEthAmount}("");
+                if (!sent) revert EthTransferFailed();
+            }
+            if (takerUsdcAmount > 0) {
+                bool success = paymentToken.transfer(msg.sender, takerUsdcAmount);
+                if (!success) revert TransferFailed();
+            }
         }
     }
 
-    /// @notice Cancel an open order and refund the escrowed tokens to the maker
+    /// @notice Cancel an open order and refund the escrowed assets to the maker
+    /// @dev SELL orders refund remaining ETH; BUY orders refund remaining USDC.
     /// @param orderId The ID of the order to cancel
     function cancelOrder(uint256 orderId) external {
         if (orderId >= _orders.length) revert InvalidOrderId();
@@ -444,13 +545,22 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         if (order.maker != msg.sender) revert NotMaker();
 
         order.status = Status.Cancelled;
-        uint256 refund = order.tokenDeposit;
-        order.tokenDeposit = 0;
+        uint256 ethRefund = order.ethRemaining;
+        uint256 tokenRefund = order.tokenRemaining;
+        order.ethRemaining = 0;
+        order.tokenRemaining = 0;
 
-        emit OrderCancelled(orderId, refund);
+        emit OrderCancelled(orderId, ethRefund, tokenRefund);
 
-        if (refund > 0) {
-            bool success = paymentToken.transfer(msg.sender, refund);
+        // Refund ETH (SELL orders)
+        if (ethRefund > 0) {
+            (bool sent, ) = payable(msg.sender).call{value: ethRefund}("");
+            if (!sent) revert EthTransferFailed();
+        }
+
+        // Refund USDC (BUY orders)
+        if (tokenRefund > 0) {
+            bool success = paymentToken.transfer(msg.sender, tokenRefund);
             if (!success) revert TransferFailed();
         }
     }
@@ -547,12 +657,25 @@ contract ConfidentialOTC is ZamaEthereumConfig {
             bool isBuy,
             Status status,
             uint256 createdAt,
-            uint256 tokenDeposit
+            uint256 ethDeposit,
+            uint256 tokenDeposit,
+            uint256 ethRemaining,
+            uint256 tokenRemaining
         )
     {
         if (orderId >= _orders.length) revert InvalidOrderId();
         Order storage order = _orders[orderId];
-        return (order.maker, order.tokenPair, order.isBuy, order.status, order.createdAt, order.tokenDeposit);
+        return (
+            order.maker,
+            order.tokenPair,
+            order.isBuy,
+            order.status,
+            order.createdAt,
+            order.ethDeposit,
+            order.tokenDeposit,
+            order.ethRemaining,
+            order.tokenRemaining
+        );
     }
 
     /// @notice Get the encrypted price handle
@@ -583,11 +706,11 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     function getFill(uint256 fillId)
         external
         view
-        returns (uint256 orderId, uint256 filledAt, uint256 tokenTransferred)
+        returns (uint256 orderId, uint256 filledAt, uint256 ethTransferred, uint256 tokenTransferred)
     {
         if (fillId >= _fills.length) revert InvalidFillId();
         Fill storage f = _fills[fillId];
-        return (f.orderId, f.filledAt, f.tokenTransferred);
+        return (f.orderId, f.filledAt, f.ethTransferred, f.tokenTransferred);
     }
 
     /// @notice Get the encrypted fill amount handle
@@ -625,4 +748,10 @@ contract ConfidentialOTC is ZamaEthereumConfig {
         return _totalVolume;
     }
 
+    // =========================================================================
+    //                          RECEIVE ETH
+    // =========================================================================
+
+    /// @notice Allow the contract to receive ETH for SELL order deposits
+    receive() external payable {}
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getContract, approveUSDC, getUSDCBalance, parseUnits } from "../lib/contract";
+import { getContract, approveUSDC, getUSDCBalance, getETHBalance, parseUnits } from "../lib/contract";
 import { encryptInputs } from "../lib/fhevm";
 import { useWallet } from "../App";
 
@@ -59,13 +59,17 @@ export default function CreateOrder() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");
-  const [usdcDeposit, setUsdcDeposit] = useState("10");
+  const [deposit, setDeposit] = useState("10");
   const [usdcBalance, setUsdcBalance] = useState("");
+  const [ethBalance, setEthBalance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (account) getUSDCBalance(account).then(setUsdcBalance).catch(() => {});
+    if (account) {
+      getUSDCBalance(account).then(setUsdcBalance).catch(() => {});
+      getETHBalance(account).then(setEthBalance).catch(() => {});
+    }
   }, [account]);
 
   const currentStep = computeStep(pair, price, amount, submitting);
@@ -86,27 +90,47 @@ export default function CreateOrder() {
       return;
     }
 
+    if (!deposit || Number(deposit) <= 0) {
+      setError("Deposit amount must be greater than 0");
+      return;
+    }
+
     try {
       setSubmitting(true);
 
-      // Step 1: Approve USDC
-      await approveUSDC(usdcDeposit);
-
-      // Step 2: Encrypt price and amount using fhEVM
+      // Encrypt price and amount using fhEVM
       const encrypted = await encryptInputs(account, priceNum, amountNum);
 
-      // Step 3: Create order with USDC deposit
       const contract = await getContract(true);
-      const tx = await contract.createOrder(
-        encrypted.handles[0],
-        encrypted.inputProof,
-        encrypted.handles[1],
-        encrypted.inputProof,
-        side === "buy",
-        pair,
-        parseUnits(usdcDeposit, 6),
-      );
-      await tx.wait();
+
+      if (side === "buy") {
+        // BUY order: deposit USDC (approve + transferFrom)
+        await approveUSDC(deposit);
+        const tx = await contract.createOrder(
+          encrypted.handles[0],
+          encrypted.inputProof,
+          encrypted.handles[1],
+          encrypted.inputProof,
+          true,
+          pair,
+          parseUnits(deposit, 6),
+        );
+        await tx.wait();
+      } else {
+        // SELL order: deposit ETH (sent as msg.value)
+        const tx = await contract.createOrder(
+          encrypted.handles[0],
+          encrypted.inputProof,
+          encrypted.handles[1],
+          encrypted.inputProof,
+          false,
+          pair,
+          0,
+          { value: parseUnits(deposit, 18) },
+        );
+        await tx.wait();
+      }
+
       navigate("/");
     } catch (err: unknown) {
       console.error(err);
@@ -114,13 +138,17 @@ export default function CreateOrder() {
     } finally {
       setSubmitting(false);
     }
-  }, [account, connect, price, amount, side, pair, navigate]);
+  }, [account, connect, price, amount, side, pair, deposit, navigate]);
 
   const steps = [
     { num: 1, label: "Select Pair" },
     { num: 2, label: "Set Terms" },
     { num: 3, label: "Encrypt & Submit" },
   ];
+
+  const depositLabel = side === "sell" ? "ETH Deposit" : "USDC Deposit";
+  const depositUnit = side === "sell" ? "ETH" : "USDC";
+  const relevantBalance = side === "sell" ? ethBalance : usdcBalance;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -206,7 +234,7 @@ export default function CreateOrder() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => setSide("buy")}
+                onClick={() => { setSide("buy"); setDeposit("10"); }}
                 className={`py-3.5 rounded-xl text-sm font-bold border-2 transition-all duration-200 cursor-pointer ${
                   side === "buy"
                     ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400 shadow-[0_0_20px_rgba(34,197,94,0.1)]"
@@ -217,10 +245,11 @@ export default function CreateOrder() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 12 6 7 11"/><line x1="12" y1="18" x2="12" y2="6"/></svg>
                   BUY
                 </span>
+                <span className="block text-[10px] font-normal mt-0.5 opacity-70">Deposit USDC</span>
               </button>
               <button
                 type="button"
-                onClick={() => setSide("sell")}
+                onClick={() => { setSide("sell"); setDeposit("0.01"); }}
                 className={`py-3.5 rounded-xl text-sm font-bold border-2 transition-all duration-200 cursor-pointer ${
                   side === "sell"
                     ? "border-red-500/50 bg-red-500/10 text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.1)]"
@@ -231,6 +260,7 @@ export default function CreateOrder() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="7 13 12 18 17 13"/><line x1="12" y1="6" x2="12" y2="18"/></svg>
                   SELL
                 </span>
+                <span className="block text-[10px] font-normal mt-0.5 opacity-70">Deposit ETH</span>
               </button>
             </div>
           </div>
@@ -304,24 +334,43 @@ export default function CreateOrder() {
                 <span className="font-medium text-slate-200">${Number(price).toLocaleString()} {pair.split("/")[1]}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-400">USDC Deposit</span>
+                <span className="text-slate-400">{depositLabel}</span>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    value={usdcDeposit}
-                    onChange={(e) => setUsdcDeposit(e.target.value)}
-                    step="1"
-                    min="1"
+                    value={deposit}
+                    onChange={(e) => setDeposit(e.target.value)}
+                    step={side === "sell" ? "0.001" : "1"}
+                    min="0"
                     className="w-24 text-right bg-[#0d1117] border border-[#1e293b] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500/50"
                   />
-                  <span className="text-slate-400 text-xs">USDC</span>
+                  <span className="text-slate-400 text-xs">{depositUnit}</span>
                 </div>
               </div>
-              {usdcBalance && (
-                <div className="text-xs text-slate-500 text-right">
-                  Balance: {Number(usdcBalance).toLocaleString()} USDC
+
+              {/* Balances */}
+              <div className="flex justify-between items-center text-xs text-slate-500">
+                <span>Your Balances:</span>
+                <div className="flex gap-3">
+                  {ethBalance && (
+                    <span className={side === "sell" ? "text-blue-400" : ""}>
+                      {Number(ethBalance).toFixed(4)} ETH
+                    </span>
+                  )}
+                  {usdcBalance && (
+                    <span className={side === "buy" ? "text-blue-400" : ""}>
+                      {Number(usdcBalance).toLocaleString()} USDC
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {relevantBalance && Number(deposit) > Number(relevantBalance) && (
+                <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                  Insufficient {depositUnit} balance
                 </div>
               )}
+
               <div className="h-px bg-[#1e293b]" />
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-400">Total Value</span>
@@ -337,7 +386,10 @@ export default function CreateOrder() {
                   <path d="M12 16l3 3 5-6" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
                 <span className="text-xs text-blue-300/70 leading-relaxed">
-                  Price, amount, and total will be encrypted using FHE before submission. Only authorized parties can decrypt.
+                  Price, amount, and total will be encrypted using FHE before submission.
+                  {side === "sell"
+                    ? " ETH will be sent with the transaction as collateral."
+                    : " USDC will be approved and transferred as collateral."}
                 </span>
               </div>
             </div>
@@ -357,7 +409,11 @@ export default function CreateOrder() {
           <button
             type="submit"
             disabled={submitting || !price || !amount}
-            className="w-full bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white py-3.5 rounded-xl font-semibold transition-all duration-200 cursor-pointer shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:shadow-[0_0_30px_rgba(59,130,246,0.3)] disabled:shadow-none"
+            className={`w-full py-3.5 rounded-xl font-semibold transition-all duration-200 cursor-pointer disabled:cursor-not-allowed disabled:shadow-none ${
+              side === "sell"
+                ? "bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.2)] hover:shadow-[0_0_30px_rgba(239,68,68,0.3)]"
+                : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 text-white shadow-[0_0_20px_rgba(34,197,94,0.2)] hover:shadow-[0_0_30px_rgba(34,197,94,0.3)]"
+            }`}
           >
             {submitting ? (
               <span className="flex items-center justify-center gap-2">
@@ -372,7 +428,9 @@ export default function CreateOrder() {
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                   <path d="M7 11V7a5 5 0 0110 0v4"/>
                 </svg>
-                Create Encrypted Order
+                {side === "sell"
+                  ? `Create SELL Order (deposit ${deposit} ETH)`
+                  : `Create BUY Order (deposit ${deposit} USDC)`}
               </span>
             )}
           </button>

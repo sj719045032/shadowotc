@@ -12,6 +12,21 @@
   },
   {
     "inputs": [],
+    "name": "EthTransferFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientRemaining",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidDepositType",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidFillId",
     "type": "error"
   },
@@ -152,6 +167,12 @@
       {
         "indexed": false,
         "internalType": "uint256",
+        "name": "ethRefunded",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
         "name": "tokenRefunded",
         "type": "uint256"
       }
@@ -189,6 +210,12 @@
       {
         "indexed": false,
         "internalType": "uint256",
+        "name": "ethDeposit",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
         "name": "tokenDeposit",
         "type": "uint256"
       }
@@ -209,6 +236,12 @@
         "indexed": true,
         "internalType": "uint256",
         "name": "fillId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "ethTransferred",
         "type": "uint256"
       },
       {
@@ -313,7 +346,7 @@
       },
       {
         "internalType": "uint256",
-        "name": "depositAmount",
+        "name": "usdcDeposit",
         "type": "uint256"
       }
     ],
@@ -325,7 +358,7 @@
         "type": "uint256"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -367,11 +400,21 @@
         "internalType": "bytes",
         "name": "takerAmountProof",
         "type": "bytes"
+      },
+      {
+        "internalType": "uint256",
+        "name": "takerEthAmount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "takerUsdcAmount",
+        "type": "uint256"
       }
     ],
     "name": "fillOrder",
     "outputs": [],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -430,6 +473,11 @@
       {
         "internalType": "uint256",
         "name": "filledAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "ethTransferred",
         "type": "uint256"
       },
       {
@@ -554,7 +602,22 @@
       },
       {
         "internalType": "uint256",
+        "name": "ethDeposit",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
         "name": "tokenDeposit",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "ethRemaining",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "tokenRemaining",
         "type": "uint256"
       }
     ],
@@ -739,5 +802,9 @@
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
+  },
+  {
+    "stateMutability": "payable",
+    "type": "receive"
   }
 ]

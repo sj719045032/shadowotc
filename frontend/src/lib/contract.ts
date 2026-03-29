@@ -84,6 +84,12 @@ export async function switchToSepolia() {
   }
 }
 
+export async function getETHBalance(address: string): Promise<string> {
+  const provider = getProvider();
+  const balance = await provider.getBalance(address);
+  return formatUnits(balance, 18);
+}
+
 export type OrderData = {
   id: number;
   maker: string;
@@ -91,7 +97,10 @@ export type OrderData = {
   isBuy: boolean;
   status: number;
   createdAt: number;
-  tokenDeposit: string; // USDC amount (formatted)
+  ethDeposit: string;
+  tokenDeposit: string;
+  ethRemaining: string;
+  tokenRemaining: string;
 };
 
 export async function fetchAllOrders(): Promise<OrderData[]> {
@@ -102,12 +111,15 @@ export async function fetchAllOrders(): Promise<OrderData[]> {
     const o = await contract.getOrder(i);
     orders.push({
       id: i,
-      maker: o.maker,
-      tokenPair: o.tokenPair,
-      isBuy: o.isBuy,
-      status: Number(o.status),
-      createdAt: Number(o.createdAt),
-      tokenDeposit: formatUnits(o.tokenDeposit, 6),
+      maker: o.maker ?? o[0],
+      tokenPair: o.tokenPair ?? o[1],
+      isBuy: o.isBuy ?? o[2],
+      status: Number(o.status ?? o[3]),
+      createdAt: Number(o.createdAt ?? o[4]),
+      ethDeposit: formatUnits(o.ethDeposit ?? o[5] ?? 0n, 18),
+      tokenDeposit: formatUnits(o.tokenDeposit ?? o[6] ?? 0n, 6),
+      ethRemaining: formatUnits(o.ethRemaining ?? o[7] ?? 0n, 18),
+      tokenRemaining: formatUnits(o.tokenRemaining ?? o[8] ?? 0n, 6),
     });
   }
   return orders;

@@ -14,6 +14,8 @@ export default function MyTrades() {
   const { account, connect } = useWallet();
   const [orders, setOrders] = useState<DecryptedOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [grantingAccess, setGrantingAccess] = useState<number | null>(null);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
 
   useEffect(() => {
     if (account) loadMyOrders();
@@ -84,6 +86,35 @@ export default function MyTrades() {
         prev.map((o) => (o.id === orderId ? { ...o, decrypting: false } : o)),
       );
     }
+  }
+
+  async function handleGrantAccess(orderId: number) {
+    const takerAddress = window.prompt("Enter the taker/viewer address to grant access:");
+    if (!takerAddress || !takerAddress.startsWith("0x")) return;
+
+    try {
+      setGrantingAccess(orderId);
+      const contract = await getContract(true);
+      const tx = await contract.grantAccess(orderId, takerAddress);
+      await tx.wait();
+      alert("Access granted successfully!");
+    } catch (err) {
+      console.error("Grant access failed:", err);
+      alert("Failed to grant access: " + ((err as Error).message?.slice(0, 80) || "Unknown error"));
+    } finally {
+      setGrantingAccess(null);
+    }
+  }
+
+  function handleShareLink(orderId: number) {
+    const url = `${window.location.origin}/?order=${orderId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(orderId);
+      setTimeout(() => setCopiedId(null), 2000);
+    }).catch(() => {
+      // fallback
+      window.prompt("Copy this link:", url);
+    });
   }
 
   // Portfolio value from decrypted orders
@@ -221,7 +252,29 @@ export default function MyTrades() {
                   </span>
                 </div>
 
-                {/* Price & Amount */}
+                {/* Deposits info */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">ETH Deposit</div>
+                    <div className="text-sm font-medium text-slate-300">
+                      {Number(o.ethDeposit).toFixed(4)} <span className="text-slate-500">ETH</span>
+                    </div>
+                    <div className="text-[10px] text-slate-600 mt-0.5">
+                      Remaining: {Number(o.ethRemaining).toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">USDC Deposit</div>
+                    <div className="text-sm font-medium text-slate-300">
+                      {Number(o.tokenDeposit).toLocaleString()} <span className="text-slate-500">USDC</span>
+                    </div>
+                    <div className="text-[10px] text-slate-600 mt-0.5">
+                      Remaining: {Number(o.tokenRemaining).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Price & Amount (encrypted) */}
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
                     <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">Price</div>
@@ -282,6 +335,52 @@ export default function MyTrades() {
                     <span className="font-bold text-lg text-blue-400">
                       ${(o.decryptedPrice * o.decryptedAmount).toLocaleString()} <span className="text-xs text-slate-500">{o.tokenPair.split("/")[1]}</span>
                     </span>
+                  </div>
+                )}
+
+                {/* Grant Access + Share Link buttons for maker's open orders */}
+                {o.maker.toLowerCase() === account.toLowerCase() && o.status === 0 && (
+                  <div className="flex gap-3 mt-4 pt-4 border-t border-[#1e293b]/50">
+                    <button
+                      onClick={() => handleGrantAccess(o.id)}
+                      disabled={grantingAccess === o.id}
+                      className="flex-1 flex items-center justify-center gap-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 hover:border-purple-500/40 text-purple-400 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
+                    >
+                      {grantingAccess === o.id ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full spinner" />
+                          Granting...
+                        </>
+                      ) : (
+                        <>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
+                          </svg>
+                          Grant Access
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleShareLink(o.id)}
+                      className="flex-1 flex items-center justify-center gap-2 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer"
+                    >
+                      {copiedId === o.id ? (
+                        <>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                          Copied!
+                        </>
+                      ) : (
+                        <>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+                          </svg>
+                          Share Link
+                        </>
+                      )}
+                    </button>
                   </div>
                 )}
 
