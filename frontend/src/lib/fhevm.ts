@@ -1,9 +1,9 @@
 import { initFhevm, createInstance, type FhevmInstance } from "fhevmjs";
 import { CONTRACT_ADDRESS, getProvider } from "./contract";
 
-// Sepolia fhEVM contract addresses
-const ACL_ADDRESS = "0x2Fb4341027eb1d2aD8B5D9708187f8f5E423573a";
-const KMS_ADDRESS = "0x9D6891A6240D6130c54ae243d8005063D05fE14b";
+// Sepolia fhEVM contract addresses (from ZamaConfig.sol)
+const ACL_ADDRESS = "0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D";
+const KMS_ADDRESS = "0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A";
 const GATEWAY_URL = "https://gateway.sepolia.zama.ai";
 
 let instance: FhevmInstance | null = null;
