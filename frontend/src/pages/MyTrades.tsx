@@ -16,6 +16,8 @@ export default function MyTrades() {
   const [loading, setLoading] = useState(true);
   const [grantingAccess, setGrantingAccess] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [grantModal, setGrantModal] = useState<{ orderId: number; address: string } | null>(null);
+  const [grantSuccess, setGrantSuccess] = useState<number | null>(null);
 
   useEffect(() => {
     if (account) loadMyOrders();
@@ -88,19 +90,19 @@ export default function MyTrades() {
     }
   }
 
-  async function handleGrantAccess(orderId: number) {
-    const takerAddress = window.prompt("Enter the taker/viewer address to grant access:");
-    if (!takerAddress || !takerAddress.startsWith("0x")) return;
+  async function handleGrantAccessSubmit() {
+    if (!grantModal || !grantModal.address.startsWith("0x") || grantModal.address.length !== 42) return;
 
     try {
-      setGrantingAccess(orderId);
+      setGrantingAccess(grantModal.orderId);
       const contract = await getContract(true);
-      const tx = await contract.grantAccess(orderId, takerAddress);
+      const tx = await contract.grantAccess(grantModal.orderId, grantModal.address);
       await tx.wait();
-      alert("Access granted successfully!");
+      setGrantSuccess(grantModal.orderId);
+      setGrantModal(null);
+      setTimeout(() => setGrantSuccess(null), 3000);
     } catch (err) {
       console.error("Grant access failed:", err);
-      alert("Failed to grant access: " + ((err as Error).message?.slice(0, 80) || "Unknown error"));
     } finally {
       setGrantingAccess(null);
     }
@@ -154,6 +156,54 @@ export default function MyTrades() {
 
   return (
     <div>
+      {/* Grant Access Modal */}
+      {grantModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) setGrantModal(null); }}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative bg-[#111827] border border-[#1e293b] rounded-2xl w-full max-w-md overflow-hidden gradient-border">
+            <div className="px-6 pt-6 pb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">Grant Access</h3>
+              <button onClick={() => setGrantModal(null)} className="text-slate-500 hover:text-slate-300 transition cursor-pointer">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="px-6 pb-6 space-y-4">
+              <p className="text-sm text-slate-400">Enter the wallet address to grant view access to Order #{grantModal.orderId}'s encrypted price and amount.</p>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Wallet Address</label>
+                <input
+                  type="text"
+                  value={grantModal.address}
+                  onChange={(e) => setGrantModal({ ...grantModal, address: e.target.value })}
+                  placeholder="0x..."
+                  className="w-full bg-[#0d1117] border border-[#1e293b] rounded-xl px-4 py-3 text-white font-mono text-sm placeholder-slate-600 focus:outline-none focus:border-purple-500/50 transition-all duration-200"
+                />
+              </div>
+              <button
+                onClick={handleGrantAccessSubmit}
+                disabled={grantingAccess !== null || !grantModal.address.startsWith("0x") || grantModal.address.length !== 42}
+                className="w-full bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 text-white py-3 rounded-xl font-medium transition-all duration-200 cursor-pointer disabled:cursor-not-allowed shadow-[0_0_20px_rgba(168,85,247,0.2)]"
+              >
+                {grantingAccess !== null ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full spinner" />
+                    Granting...
+                  </span>
+                ) : "Grant View Access"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grant success toast */}
+      {grantSuccess !== null && (
+        <div className="fixed top-20 right-6 z-50 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-xl px-5 py-3 text-sm font-medium shadow-lg backdrop-blur-sm page-fade-in flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Access granted for Order #{grantSuccess}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
@@ -342,7 +392,7 @@ export default function MyTrades() {
                 {o.maker.toLowerCase() === account.toLowerCase() && o.status === 0 && (
                   <div className="flex gap-3 mt-4 pt-4 border-t border-[#1e293b]/50">
                     <button
-                      onClick={() => handleGrantAccess(o.id)}
+                      onClick={() => setGrantModal({ orderId: o.id, address: "" })}
                       disabled={grantingAccess === o.id}
                       className="flex-1 flex items-center justify-center gap-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 hover:border-purple-500/40 text-purple-400 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
                     >
