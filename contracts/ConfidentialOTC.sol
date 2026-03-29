@@ -104,6 +104,9 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     /// @notice Mapping from orderId to list of fill indices
     mapping(uint256 => uint256[]) private _orderFills;
 
+    /// @notice Mapping from taker address to list of fill indices they participated in
+    mapping(address => uint256[]) private _takerFillIds;
+
     /// @notice Cumulative encrypted volume across all fills (for protocol stats)
     euint64 private _totalVolume;
 
@@ -335,6 +338,7 @@ contract ConfidentialOTC is ZamaEthereumConfig {
             // Filling a BUY order: taker sends ETH, receives USDC
             if (msg.value != takerEthAmount) revert InvalidDepositType();
             if (takerEthAmount == 0) revert ZeroDeposit();
+            if (takerUsdcAmount == 0) revert ZeroDeposit();
             if (takerUsdcAmount > order.tokenRemaining) revert InsufficientRemaining();
         }
 
@@ -503,6 +507,7 @@ contract ConfidentialOTC is ZamaEthereumConfig {
             })
         );
         _orderFills[orderId].push(fillId);
+        _takerFillIds[msg.sender].push(fillId);
         totalFillCount++;
 
         // === FHE op 14: makePubliclyDecryptable - Post-trade transparency ===
@@ -742,6 +747,11 @@ contract ConfidentialOTC is ZamaEthereumConfig {
     function getOrderFills(uint256 orderId) external view returns (uint256[] memory) {
         if (orderId >= _orders.length) revert InvalidOrderId();
         return _orderFills[orderId];
+    }
+
+    /// @notice Get the list of fill IDs where the caller was the taker
+    function getMyFills() external view returns (uint256[] memory) {
+        return _takerFillIds[msg.sender];
     }
 
     /// @notice Get the encrypted total protocol volume handle

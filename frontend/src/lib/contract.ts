@@ -133,4 +133,34 @@ export async function fetchAllOrders(): Promise<OrderData[]> {
   return orders;
 }
 
+export type FillData = {
+  orderId: number;
+  ethTransferred: string;
+  tokenTransferred: string;
+  filledAt: number;
+};
+
+export async function fetchMyFillIds(): Promise<number[]> {
+  const contract = await getContract();
+  const ids: bigint[] = await contract.getMyFills();
+  return ids.map((id) => Number(id));
+}
+
+export async function fetchFillDetail(fillId: number): Promise<FillData> {
+  const contract = await getContract();
+  const f = await contract.getFill(fillId);
+  return {
+    orderId: Number(f.orderId ?? f[0]),
+    filledAt: Number(f.filledAt ?? f[1]),
+    ethTransferred: formatUnits(f.ethTransferred ?? f[2] ?? 0n, 18),
+    tokenTransferred: formatUnits(f.tokenTransferred ?? f[3] ?? 0n, 6),
+  };
+}
+
+export async function fetchOrderFillIds(orderId: number): Promise<number[]> {
+  const contract = await getContract();
+  const ids: bigint[] = await contract.getOrderFills(orderId);
+  return ids.map((id) => Number(id));
+}
+
 export { parseUnits, formatUnits };

@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { fetchAllOrders, type OrderData, getContract, CONTRACT_ADDRESS, approveUSDC, parseUnits } from "../lib/contract";
 import { useWallet } from "../App";
 import { encryptInputs, decryptValues, unscaleFromFHE } from "../lib/fhevm";
+import TransactionModal, { type Step } from "../components/TransactionModal";
 
 const STATUS_LABELS = ["Open", "Filled", "Cancelled"];
 
@@ -30,6 +31,28 @@ export default function OrderBook() {
   const nav = useNavigate();
   const highlightOrderId = searchParams.get("order");
   const orderRefs = useRef<Record<number, HTMLElement | null>>({});
+
+  // Transaction modal state
+  const [txModalOpen, setTxModalOpen] = useState(false);
+  const [txModalTitle, setTxModalTitle] = useState("");
+  const [txSteps, setTxSteps] = useState<Step[]>([]);
+  const [txError, setTxError] = useState("");
+
+  function openTxModal(title: string, steps: Step[]) {
+    setTxModalTitle(title);
+    setTxSteps(steps);
+    setTxError("");
+    setTxModalOpen(true);
+  }
+
+  function updateTxStep(idx: number, status: Step["status"]) {
+    setTxSteps((prev) => prev.map((s, i) => i === idx ? { ...s, status } : s));
+  }
+
+  function failTxModal(msg: string) {
+    setTxError(msg);
+    setTxSteps((prev) => prev.map((s) => s.status === "active" ? { ...s, status: "error" } : s));
+  }
 
   // Filters
   const [filterPair, setFilterPair] = useState("all");
@@ -111,52 +134,94 @@ export default function OrderBook() {
       return;
     }
 
+    const isSellOrder = !fillingOrder.isBuy;
+    const steps: Step[] = isSellOrder
+      ? [
+          { label: "Encrypting bid", status: "pending" },
+          { label: "Approving USDC", status: "pending" },
+          { label: "Submitting fill", status: "pending" },
+          { label: "Waiting for confirmation", status: "pending" },
+        ]
+      : [
+          { label: "Encrypting bid", status: "pending" },
+          { label: "Submitting fill (sending ETH)", status: "pending" },
+          { label: "Waiting for confirmation", status: "pending" },
+        ];
+    openTxModal("Filling Order", steps);
+
     try {
       setFilling(fillingOrder.id);
       setFillError("");
+      let stepIdx = 0;
 
-      // Encrypt taker's price (= maker's price to ensure match) and fill amount
+      // Step: Encrypting
+      updateTxStep(stepIdx, "active");
       const encrypted = await encryptInputs(account, price, fillAmt);
+      updateTxStep(stepIdx, "done");
+      stepIdx++;
+
       const contract = await getContract(true);
 
       if (fillingOrder.isBuy) {
-        // Filling a BUY order: taker sends ETH, receives USDC
+        // Step: Submitting fill (sending ETH)
+        updateTxStep(stepIdx, "active");
         const ethAmount = String(fillAmt);
+        const usdcToReceive = String(fillAmt * price);
         const tx = await contract.fillOrder(
           fillingOrder.id,
           encrypted.handles[0],
           encrypted.inputProof,
           encrypted.handles[1],
           encrypted.inputProof,
-          parseUnits(ethAmount, 18), // takerEthAmount
-          0,                          // takerUsdcAmount = 0
+          parseUnits(ethAmount, 18),       // takerEthAmount (taker pays)
+          parseUnits(usdcToReceive, 6),    // takerUsdcAmount (taker receives)
           { value: parseUnits(ethAmount, 18) },
         );
+        updateTxStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Waiting for confirmation
+        updateTxStep(stepIdx, "active");
         await tx.wait();
+        updateTxStep(stepIdx, "done");
       } else {
-        // Filling a SELL order: taker sends USDC, receives ETH
+        // Step: Approving USDC
+        updateTxStep(stepIdx, "active");
         const ethToReceive = String(fillAmt);
         const usdcAmount = String(fillAmt * price);
         if (Number(usdcAmount) > 0) {
           await approveUSDC(usdcAmount);
         }
+        updateTxStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Submitting fill
+        updateTxStep(stepIdx, "active");
         const tx = await contract.fillOrder(
           fillingOrder.id,
           encrypted.handles[0],
           encrypted.inputProof,
           encrypted.handles[1],
           encrypted.inputProof,
-          parseUnits(ethToReceive, 18),    // takerEthAmount = ETH taker receives
-          parseUnits(usdcAmount, 6),       // takerUsdcAmount = USDC taker pays
+          parseUnits(ethToReceive, 18),
+          parseUnits(usdcAmount, 6),
         );
+        updateTxStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Waiting for confirmation
+        updateTxStep(stepIdx, "active");
         await tx.wait();
+        updateTxStep(stepIdx, "done");
       }
 
       setFillingOrder(null);
       await loadOrders();
     } catch (err) {
       console.error("Fill failed:", err);
-      setFillError((err as Error).message?.slice(0, 120) || "Transaction failed");
+      const msg = (err as Error).message?.slice(0, 120) || "Transaction failed";
+      setFillError(msg);
+      failTxModal(msg);
     } finally {
       setFilling(null);
     }
@@ -378,6 +443,15 @@ export default function OrderBook() {
           </div>
         </div>
       )}
+
+      {/* Transaction Modal */}
+      <TransactionModal
+        open={txModalOpen}
+        title={txModalTitle}
+        steps={txSteps}
+        error={txError}
+        onClose={() => { setTxModalOpen(false); setTxError(""); }}
+      />
 
       {/* Hero Banner */}
       <div className="relative overflow-hidden rounded-2xl mb-8 gradient-border">

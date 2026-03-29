@@ -2042,6 +2042,173 @@ describe("ConfidentialOTC - Confidential Dark Pool (ETH/USDC Swaps)", function (
   });
 
   // =========================================================================
+  //                       TAKER FILL TRACKING
+  // =========================================================================
+
+  describe("getMyFills", function () {
+    it("taker can see their fills via getMyFills", async function () {
+      // Create a SELL order (Alice deposits ETH)
+      const ethDeposit = ethers.parseEther("1.0");
+      const makerInput = await fhevm
+        .createEncryptedInput(contractAddress, signers.alice.address)
+        .add64(1500)
+        .add64(100)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.alice)
+          .createOrder(
+            makerInput.handles[0],
+            makerInput.inputProof,
+            makerInput.handles[1],
+            makerInput.inputProof,
+            false,
+            "ETH/USDC",
+            0,
+            { value: ethDeposit },
+          )
+      ).wait();
+
+      // Bob fills the order
+      const takerUsdc = 150000n;
+      await mintAndApprove(signers.bob, takerUsdc);
+
+      const takerInput = await fhevm
+        .createEncryptedInput(contractAddress, signers.bob.address)
+        .add64(1500)
+        .add64(100)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.bob)
+          .fillOrder(
+            0,
+            takerInput.handles[0],
+            takerInput.inputProof,
+            takerInput.handles[1],
+            takerInput.inputProof,
+            ethDeposit,
+            takerUsdc,
+          )
+      ).wait();
+
+      // Bob should see his fill
+      const bobFills = await contract.connect(signers.bob).getMyFills();
+      expect(bobFills.length).to.eq(1);
+      expect(bobFills[0]).to.eq(0);
+
+      // Alice (maker, not taker) should have no fills
+      const aliceFills = await contract.connect(signers.alice).getMyFills();
+      expect(aliceFills.length).to.eq(0);
+
+      // Carol should have no fills
+      const carolFills = await contract.connect(signers.carol).getMyFills();
+      expect(carolFills.length).to.eq(0);
+    });
+
+    it("taker fills accumulate across multiple orders", async function () {
+      // Create first SELL order
+      const ethDeposit1 = ethers.parseEther("0.5");
+      const maker1Input = await fhevm
+        .createEncryptedInput(contractAddress, signers.alice.address)
+        .add64(1000)
+        .add64(50)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.alice)
+          .createOrder(
+            maker1Input.handles[0],
+            maker1Input.inputProof,
+            maker1Input.handles[1],
+            maker1Input.inputProof,
+            false,
+            "ETH/USDC",
+            0,
+            { value: ethDeposit1 },
+          )
+      ).wait();
+
+      // Bob fills first order
+      const taker1Usdc = 50000n;
+      await mintAndApprove(signers.bob, taker1Usdc);
+      const taker1Input = await fhevm
+        .createEncryptedInput(contractAddress, signers.bob.address)
+        .add64(1000)
+        .add64(50)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.bob)
+          .fillOrder(
+            0,
+            taker1Input.handles[0],
+            taker1Input.inputProof,
+            taker1Input.handles[1],
+            taker1Input.inputProof,
+            ethDeposit1,
+            taker1Usdc,
+          )
+      ).wait();
+
+      // Create second BUY order
+      const usdcDeposit2 = 300000n;
+      await mintAndApprove(signers.alice, usdcDeposit2);
+      const maker2Input = await fhevm
+        .createEncryptedInput(contractAddress, signers.alice.address)
+        .add64(2000)
+        .add64(30)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.alice)
+          .createOrder(
+            maker2Input.handles[0],
+            maker2Input.inputProof,
+            maker2Input.handles[1],
+            maker2Input.inputProof,
+            true,
+            "ETH/USDC",
+            usdcDeposit2,
+          )
+      ).wait();
+
+      // Bob fills second order
+      const taker2Input = await fhevm
+        .createEncryptedInput(contractAddress, signers.bob.address)
+        .add64(2000)
+        .add64(30)
+        .encrypt();
+
+      await (
+        await contract
+          .connect(signers.bob)
+          .fillOrder(
+            1,
+            taker2Input.handles[0],
+            taker2Input.inputProof,
+            taker2Input.handles[1],
+            taker2Input.inputProof,
+            ethers.parseEther("0.3"),
+            usdcDeposit2,
+            { value: ethers.parseEther("0.3") },
+          )
+      ).wait();
+
+      // Bob should see both fills
+      const bobFills = await contract.connect(signers.bob).getMyFills();
+      expect(bobFills.length).to.eq(2);
+      expect(bobFills[0]).to.eq(0);
+      expect(bobFills[1]).to.eq(1);
+    });
+  });
+
+  // =========================================================================
   //                        EDGE CASES
   // =========================================================================
 

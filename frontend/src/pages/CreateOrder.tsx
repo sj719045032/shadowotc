@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { getContract, approveUSDC, getUSDCBalance, getETHBalance, parseUnits } from "../lib/contract";
 import { encryptInputs } from "../lib/fhevm";
 import { useWallet } from "../App";
+import TransactionModal, { type Step } from "../components/TransactionModal";
 
 const TOKEN_PAIRS = ["ETH/USDC", "BTC/USDC", "SOL/USDC", "AVAX/USDC", "MATIC/USDC"];
 
@@ -14,43 +15,6 @@ function computeStep(pair: string, price: string, amount: string, submitting: bo
   return 1;
 }
 
-// Scramble text for encryption animation
-function EncryptionAnimation() {
-  const [chars, setChars] = useState<string[]>([]);
-  const pool = "0123456789abcdef";
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setChars(
-        Array.from({ length: 24 }, () => pool[Math.floor(Math.random() * pool.length)])
-      );
-    }, 80);
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="flex items-center justify-center py-8">
-      <div className="text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-500/10 mb-4 encrypt-pulse">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-            <path d="M7 11V7a5 5 0 0110 0v4"/>
-          </svg>
-        </div>
-        <div className="text-sm text-blue-400 font-medium mb-3">Encrypting your order...</div>
-        <div className="font-mono text-xs text-blue-500/60 tracking-wider overflow-hidden">
-          <span className="text-blue-400/40">0x</span>
-          {chars.map((c, i) => (
-            <span key={i} className="scramble-char" style={{ animationDelay: `${i * 0.05}s` }}>
-              {c}
-            </span>
-          ))}
-        </div>
-        <div className="text-xs text-slate-500 mt-3">FHE encryption in progress...</div>
-      </div>
-    </div>
-  );
-}
 
 export default function CreateOrder() {
   const { account, connect } = useWallet();
@@ -64,6 +28,9 @@ export default function CreateOrder() {
   const [ethBalance, setEthBalance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [txSteps, setTxSteps] = useState<Step[]>([]);
+  const [txModalOpen, setTxModalOpen] = useState(false);
+  const [txError, setTxError] = useState("");
 
   useEffect(() => {
     if (account) {
@@ -74,9 +41,30 @@ export default function CreateOrder() {
 
   const currentStep = computeStep(pair, price, amount, submitting);
 
+  function makeSteps(isBuy: boolean): Step[] {
+    if (isBuy) {
+      return [
+        { label: "Encrypting price & amount", status: "pending" },
+        { label: "Approving USDC", status: "pending" },
+        { label: "Submitting transaction", status: "pending" },
+        { label: "Waiting for confirmation", status: "pending" },
+      ];
+    }
+    return [
+      { label: "Encrypting price & amount", status: "pending" },
+      { label: "Submitting transaction", status: "pending" },
+      { label: "Waiting for confirmation", status: "pending" },
+    ];
+  }
+
+  function updateStep(idx: number, status: Step["status"]) {
+    setTxSteps((prev) => prev.map((s, i) => i === idx ? { ...s, status } : s));
+  }
+
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setTxError("");
 
     if (!account) {
       await connect();
@@ -95,17 +83,32 @@ export default function CreateOrder() {
       return;
     }
 
+    const isBuy = side === "buy";
+    const steps = makeSteps(isBuy);
+    setTxSteps(steps);
+    setTxModalOpen(true);
+
     try {
       setSubmitting(true);
+      let stepIdx = 0;
 
-      // Encrypt price and amount using fhEVM
+      // Step: Encrypting
+      updateStep(stepIdx, "active");
       const encrypted = await encryptInputs(account, priceNum, amountNum);
+      updateStep(stepIdx, "done");
+      stepIdx++;
 
       const contract = await getContract(true);
 
-      if (side === "buy") {
-        // BUY order: deposit USDC (approve + transferFrom)
+      if (isBuy) {
+        // Step: Approving USDC
+        updateStep(stepIdx, "active");
         await approveUSDC(deposit);
+        updateStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Submitting transaction
+        updateStep(stepIdx, "active");
         const tx = await contract.createOrder(
           encrypted.handles[0],
           encrypted.inputProof,
@@ -115,9 +118,16 @@ export default function CreateOrder() {
           pair,
           parseUnits(deposit, 6),
         );
+        updateStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Waiting for confirmation
+        updateStep(stepIdx, "active");
         await tx.wait();
+        updateStep(stepIdx, "done");
       } else {
-        // SELL order: deposit ETH (sent as msg.value)
+        // Step: Submitting transaction
+        updateStep(stepIdx, "active");
         const tx = await contract.createOrder(
           encrypted.handles[0],
           encrypted.inputProof,
@@ -128,17 +138,28 @@ export default function CreateOrder() {
           0,
           { value: parseUnits(deposit, 18) },
         );
+        updateStep(stepIdx, "done");
+        stepIdx++;
+
+        // Step: Waiting for confirmation
+        updateStep(stepIdx, "active");
         await tx.wait();
+        updateStep(stepIdx, "done");
       }
 
-      navigate("/");
+      // Auto-navigate after short delay
+      setTimeout(() => navigate("/"), 1200);
     } catch (err: unknown) {
       console.error(err);
-      setError((err as Error).message?.slice(0, 100) || "Transaction failed");
+      const msg = (err as Error).message?.slice(0, 100) || "Transaction failed";
+      setError(msg);
+      setTxError(msg);
+      // Mark current active step as error
+      setTxSteps((prev) => prev.map((s) => s.status === "active" ? { ...s, status: "error" } : s));
     } finally {
       setSubmitting(false);
     }
-  }, [account, connect, price, amount, side, pair, navigate]);
+  }, [account, connect, price, amount, side, pair, deposit, navigate]);
 
   const steps = [
     { num: 1, label: "Select Pair" },
@@ -185,14 +206,14 @@ export default function CreateOrder() {
         ))}
       </div>
 
-      {/* Submitting modal overlay */}
-      {submitting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="rounded-2xl bg-[#111827] border border-blue-500/20 gradient-border overflow-hidden w-full max-w-md mx-4">
-            <EncryptionAnimation />
-          </div>
-        </div>
-      )}
+      {/* Transaction modal */}
+      <TransactionModal
+        open={txModalOpen}
+        title={side === "sell" ? "Creating SELL Order" : "Creating BUY Order"}
+        steps={txSteps}
+        error={txError}
+        onClose={() => { setTxModalOpen(false); setTxError(""); }}
+      />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Step 1: Token Pair */}
