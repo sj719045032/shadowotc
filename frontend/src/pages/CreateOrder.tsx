@@ -59,7 +59,7 @@ export default function CreateOrder() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");
-  const [deposit, setDeposit] = useState("10");
+  const deposit = side === "sell" ? amount : (price && amount ? String(Number(price) * Number(amount)) : "");
   const [usdcBalance, setUsdcBalance] = useState("");
   const [ethBalance, setEthBalance] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -138,7 +138,7 @@ export default function CreateOrder() {
     } finally {
       setSubmitting(false);
     }
-  }, [account, connect, price, amount, side, pair, deposit, navigate]);
+  }, [account, connect, price, amount, side, pair, navigate]);
 
   const steps = [
     { num: 1, label: "Select Pair" },
@@ -234,7 +234,7 @@ export default function CreateOrder() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => { setSide("buy"); setDeposit("10"); }}
+                onClick={() => setSide("buy")}
                 className={`py-3.5 rounded-xl text-sm font-bold border-2 transition-all duration-200 cursor-pointer ${
                   side === "buy"
                     ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400 shadow-[0_0_20px_rgba(34,197,94,0.1)]"
@@ -249,7 +249,7 @@ export default function CreateOrder() {
               </button>
               <button
                 type="button"
-                onClick={() => { setSide("sell"); setDeposit("0.01"); }}
+                onClick={() => setSide("sell")}
                 className={`py-3.5 rounded-xl text-sm font-bold border-2 transition-all duration-200 cursor-pointer ${
                   side === "sell"
                     ? "border-red-500/50 bg-red-500/10 text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.1)]"
@@ -334,18 +334,8 @@ export default function CreateOrder() {
                 <span className="font-medium text-slate-200">${Number(price).toLocaleString()} {pair.split("/")[1]}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-400">{depositLabel}</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={deposit}
-                    onChange={(e) => setDeposit(e.target.value)}
-                    step={side === "sell" ? "0.001" : "1"}
-                    min="0"
-                    className="w-24 text-right bg-[#0d1117] border border-[#1e293b] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500/50"
-                  />
-                  <span className="text-slate-400 text-xs">{depositUnit}</span>
-                </div>
+                <span className="text-slate-400">{depositLabel} (auto)</span>
+                <span className="font-medium text-slate-200">{deposit ? Number(deposit).toLocaleString() : "—"} {depositUnit}</span>
               </div>
 
               {/* Balances */}
