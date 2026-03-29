@@ -112,8 +112,6 @@ export default function OrderDetail() {
   if (!order) return <div className="text-center py-20 text-slate-400">Order #{orderId} not found</div>;
 
   const isMaker = account?.toLowerCase() === order.maker.toLowerCase();
-  const deposit = order.isBuy ? `${Number(order.tokenDeposit).toLocaleString()} USDC` : `${Number(order.ethDeposit).toFixed(6)} ETH`;
-  const remaining = order.isBuy ? `${Number(order.tokenRemaining).toLocaleString()} USDC` : `${Number(order.ethRemaining).toFixed(6)} ETH`;
   const usdcToPay = decryptedPrice && fillAmount ? (Number(fillAmount) * decryptedPrice).toLocaleString() : "—";
 
   return (
@@ -141,18 +139,6 @@ export default function OrderDetail() {
               </span>
             </div>
             <span className="text-lg font-medium text-slate-300">{order.tokenPair}</span>
-          </div>
-
-          {/* Info grid */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="bg-[#0d1117] rounded-xl p-4 border border-[#1e293b]/50">
-              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Deposit</div>
-              <div className="text-lg font-bold text-white">{deposit}</div>
-            </div>
-            <div className="bg-[#0d1117] rounded-xl p-4 border border-[#1e293b]/50">
-              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Remaining</div>
-              <div className="text-lg font-bold text-white">{remaining}</div>
-            </div>
           </div>
 
           {/* Maker info */}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { fetchAllOrders, type OrderData, getContract, CONTRACT_ADDRESS, approveUSDC, parseUnits } from "../lib/contract";
 import { useWallet } from "../App";
 import { encryptInputs, decryptValues, unscaleFromFHE } from "../lib/fhevm";
@@ -27,6 +27,7 @@ export default function OrderBook() {
   const [fillingOrder, setFillingOrder] = useState<FillingOrder | null>(null);
   const [fillError, setFillError] = useState("");
   const [searchParams] = useSearchParams();
+  const nav = useNavigate();
   const highlightOrderId = searchParams.get("order");
   const orderRefs = useRef<Record<number, HTMLElement | null>>({});
 
@@ -522,7 +523,8 @@ export default function OrderBook() {
                     <tr
                       key={o.id}
                       ref={(el) => { orderRefs.current[o.id] = el; }}
-                      className={`border-t border-[#1e293b]/60 hover:bg-blue-500/[0.03] transition-colors duration-200 row-enter ${
+                      onClick={() => nav(`/order/${o.id}`)}
+                      className={`border-t border-[#1e293b]/60 hover:bg-blue-500/[0.03] transition-colors duration-200 row-enter cursor-pointer ${
                         isHighlighted(o.id) ? "bg-blue-500/[0.08] ring-1 ring-blue-500/30" : ""
                       }`}
                       style={{ animationDelay: `${idx * 40}ms` }}
@@ -605,7 +607,8 @@ export default function OrderBook() {
               <div
                 key={o.id}
                 ref={(el) => { orderRefs.current[o.id] = el; }}
-                className={`bg-[#111827] border border-[#1e293b] rounded-xl p-4 row-enter ${
+                onClick={() => nav(`/order/${o.id}`)}
+                className={`bg-[#111827] border border-[#1e293b] rounded-xl p-4 row-enter cursor-pointer hover:border-blue-500/20 transition ${
                   isHighlighted(o.id) ? "ring-1 ring-blue-500/30 bg-blue-500/[0.05]" : ""
                 }`}
                 style={{ animationDelay: `${idx * 50}ms` }}
