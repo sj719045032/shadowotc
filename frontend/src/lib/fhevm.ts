@@ -1,23 +1,14 @@
-import { initFhevm, createInstance, type FhevmInstance } from "fhevmjs";
+import { createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/web";
 import { CONTRACT_ADDRESS, getProvider } from "./contract";
-
-// Sepolia fhEVM contract addresses (from ZamaConfig.sol)
-const ACL_ADDRESS = "0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D";
-const KMS_ADDRESS = "0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A";
-const GATEWAY_URL = "https://gateway.sepolia.zama.ai";
 
 let instance: FhevmInstance | null = null;
 
 export async function getFhevmInstance(): Promise<FhevmInstance> {
   if (instance) return instance;
 
-  await initFhevm();
-
   instance = await createInstance({
-    kmsContractAddress: KMS_ADDRESS,
-    aclContractAddress: ACL_ADDRESS,
+    ...SepoliaConfig,
     network: window.ethereum,
-    gatewayUrl: GATEWAY_URL,
   });
 
   return instance;
@@ -39,30 +30,53 @@ export async function encryptInputs(
   return encrypted;
 }
 
-export async function decryptValue(
-  handle: bigint,
-  contractAddress: string,
+export async function decryptValues(
+  handles: { handle: string; contractAddress: string }[],
   userAddress: string,
-): Promise<bigint> {
+): Promise<Map<string, bigint>> {
   const fhevmInstance = await getFhevmInstance();
-  const { publicKey, privateKey } = fhevmInstance.generateKeypair();
-
   const provider = getProvider();
   const signer = await provider.getSigner();
 
-  const eip712 = fhevmInstance.createEIP712(publicKey, contractAddress);
-  const signature = await signer.signTypedData(
-    eip712.domain,
-    { Reencrypt: eip712.types.Reencrypt },
-    eip712.message,
+  const { publicKey, privateKey } = fhevmInstance.generateKeypair();
+
+  const now = Math.floor(Date.now() / 1000);
+  const contractAddresses = [...new Set(handles.map((h) => h.contractAddress))];
+
+  const eip712 = fhevmInstance.createEIP712(
+    publicKey,
+    contractAddresses,
+    now,
+    1, // 1 day duration
   );
 
-  return fhevmInstance.reencrypt(
-    handle,
+  const { EIP712Domain: _, ...sigTypes } = eip712.types;
+  // Cast to mutable for ethers.js compatibility
+  const mutableTypes: Record<string, { name: string; type: string }[]> = {};
+  for (const [key, val] of Object.entries(sigTypes)) {
+    mutableTypes[key] = [...val];
+  }
+  const signature = await signer.signTypedData(
+    eip712.domain as Record<string, unknown>,
+    mutableTypes,
+    eip712.message as Record<string, unknown>,
+  );
+
+  const results = await fhevmInstance.userDecrypt(
+    handles,
     privateKey,
     publicKey,
     signature,
-    contractAddress,
+    contractAddresses,
     userAddress,
+    now,
+    1,
   );
+
+  // Convert results to a map of handle -> decrypted value
+  const decrypted = new Map<string, bigint>();
+  for (const [handle, result] of Object.entries(results)) {
+    decrypted.set(handle, BigInt(result as number | bigint));
+  }
+  return decrypted;
 }

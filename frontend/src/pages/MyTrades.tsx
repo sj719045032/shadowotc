@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { fetchAllOrders, type OrderData, getContract, CONTRACT_ADDRESS } from "../lib/contract";
 import { useWallet } from "../App";
-import { decryptValue } from "../lib/fhevm";
+import { decryptValues } from "../lib/fhevm";
 
 type DecryptedOrder = OrderData & {
   decryptedPrice?: number;
@@ -42,28 +42,26 @@ export default function MyTrades() {
       );
 
       const contract = await getContract();
-
       const encPrice = await contract.getPrice(orderId);
       const encAmount = await contract.getAmount(orderId);
 
-      const priceResult = await decryptValue(
-        BigInt(encPrice),
-        CONTRACT_ADDRESS,
+      const results = await decryptValues(
+        [
+          { handle: encPrice.toString(), contractAddress: CONTRACT_ADDRESS },
+          { handle: encAmount.toString(), contractAddress: CONTRACT_ADDRESS },
+        ],
         account,
       );
-      const amountResult = await decryptValue(
-        BigInt(encAmount),
-        CONTRACT_ADDRESS,
-        account,
-      );
+
+      const values = [...results.values()];
 
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
             ? {
                 ...o,
-                decryptedPrice: Number(priceResult),
-                decryptedAmount: Number(amountResult),
+                decryptedPrice: Number(values[0] || 0n),
+                decryptedAmount: Number(values[1] || 0n),
                 decrypting: false,
               }
             : o,
