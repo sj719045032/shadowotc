@@ -127,7 +127,8 @@ export default function OrderBook() {
           encrypted.inputProof,
           encrypted.handles[1],
           encrypted.inputProof,
-          0,
+          parseUnits(ethAmount, 18), // takerEthAmount
+          0,                          // takerUsdcAmount = 0
           { value: parseUnits(ethAmount, 18) },
         );
         await tx.wait();
@@ -143,7 +144,8 @@ export default function OrderBook() {
           encrypted.inputProof,
           encrypted.handles[1],
           encrypted.inputProof,
-          parseUnits(usdcAmount, 6),
+          0,                              // takerEthAmount = 0
+          parseUnits(usdcAmount, 6),      // takerUsdcAmount
         );
         await tx.wait();
       }
