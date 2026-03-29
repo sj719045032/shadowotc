@@ -1,6 +1,6 @@
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { ethers, fhevm } from "hardhat";
-import { ConfidentialOTC, ConfidentialOTC__factory } from "../types";
+import { ConfidentialOTC, ConfidentialOTC__factory, MockERC20, MockERC20__factory } from "../types";
 import { expect } from "chai";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 
@@ -13,16 +13,24 @@ type Signers = {
 };
 
 async function deployFixture() {
+  // Deploy mock ERC20 token (USDC with 6 decimals)
+  const tokenFactory = (await ethers.getContractFactory("MockERC20")) as MockERC20__factory;
+  const token = (await tokenFactory.deploy("Mock USDC", "USDC", 6)) as MockERC20;
+  const tokenAddress = await token.getAddress();
+
+  // Deploy ConfidentialOTC with the mock token
   const factory = (await ethers.getContractFactory("ConfidentialOTC")) as ConfidentialOTC__factory;
-  const contract = (await factory.deploy()) as ConfidentialOTC;
+  const contract = (await factory.deploy(tokenAddress)) as ConfidentialOTC;
   const contractAddress = await contract.getAddress();
-  return { contract, contractAddress };
+  return { contract, contractAddress, token, tokenAddress };
 }
 
 describe("ConfidentialOTC - Confidential Dark Pool", function () {
   let signers: Signers;
   let contract: ConfidentialOTC;
   let contractAddress: string;
+  let token: MockERC20;
+  let tokenAddress: string;
 
   before(async function () {
     const ethSigners = await ethers.getSigners();
@@ -40,8 +48,14 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       console.warn("This test suite requires mock FHEVM");
       this.skip();
     }
-    ({ contract, contractAddress } = await deployFixture());
+    ({ contract, contractAddress, token, tokenAddress } = await deployFixture());
   });
+
+  // Helper: mint tokens and approve the OTC contract
+  async function mintAndApprove(signer: HardhatEthersSigner, amount: bigint) {
+    await (await token.mint(signer.address, amount)).wait();
+    await (await token.connect(signer).approve(contractAddress, amount)).wait();
+  }
 
   // =========================================================================
   //                        OWNERSHIP & ADMIN
@@ -102,14 +116,15 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
   // =========================================================================
 
   describe("createOrder", function () {
-    it("should create an order with encrypted price and amount and ETH deposit", async function () {
+    it("should create an order with encrypted price and amount and token deposit", async function () {
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500) // price
         .add64(100) // amount
         .encrypt();
 
-      const depositAmount = ethers.parseEther("1.0");
+      const depositAmount = 1000000n; // 1 USDC (6 decimals)
+      await mintAndApprove(signers.alice, depositAmount);
 
       const tx = await contract
         .connect(signers.alice)
@@ -120,7 +135,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
           encInput.inputProof,
           true,
           "ETH/USDC",
-          { value: depositAmount },
+          depositAmount,
         );
 
       await expect(tx)
@@ -134,10 +149,10 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       expect(order.tokenPair).to.eq("ETH/USDC");
       expect(order.isBuy).to.eq(true);
       expect(order.status).to.eq(0); // Open
-      expect(order.ethDeposit).to.eq(depositAmount);
+      expect(order.tokenDeposit).to.eq(depositAmount);
     });
 
-    it("should revert if no ETH is deposited", async function () {
+    it("should revert if deposit amount is zero", async function () {
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -154,8 +169,34 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
+            0,
           ),
       ).to.be.revertedWithCustomError(contract, "ZeroDeposit");
+    });
+
+    it("should revert if maker has not approved tokens", async function () {
+      const encInput = await fhevm
+        .createEncryptedInput(contractAddress, signers.alice.address)
+        .add64(1500)
+        .add64(100)
+        .encrypt();
+
+      // Mint but do NOT approve
+      await (await token.mint(signers.alice.address, 1000000n)).wait();
+
+      await expect(
+        contract
+          .connect(signers.alice)
+          .createOrder(
+            encInput.handles[0],
+            encInput.inputProof,
+            encInput.handles[1],
+            encInput.inputProof,
+            true,
+            "ETH/USDC",
+            1000000n,
+          ),
+      ).to.be.revertedWith("ERC20: insufficient allowance");
     });
 
     it("maker can decrypt their own order price and amount", async function () {
@@ -164,6 +205,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
         .add64(2500)
         .add64(50)
         .encrypt();
+
+      const depositAmount = 2000000n; // 2 USDC
+      await mintAndApprove(signers.alice, depositAmount);
 
       await (
         await contract
@@ -175,7 +219,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             false,
             "BTC/USDC",
-            { value: ethers.parseEther("2.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -208,6 +252,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
           .add64(10 + i)
           .encrypt();
 
+        const depositAmount = 500000n; // 0.5 USDC
+        await mintAndApprove(signers.alice, depositAmount);
+
         await (
           await contract
             .connect(signers.alice)
@@ -218,7 +265,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
               encInput.inputProof,
               true,
               "ETH/USDC",
-              { value: ethers.parseEther("0.5") },
+              depositAmount,
             )
         ).wait();
       }
@@ -235,9 +282,11 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     let orderId: number;
     const makerPrice = 1500;
     const makerAmount = 100;
-    const depositAmount = ethers.parseEther("1.0");
+    const depositAmount = 1000000n; // 1 USDC
 
     beforeEach(async function () {
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(makerPrice)
@@ -254,7 +303,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: depositAmount },
+            depositAmount,
           )
       ).wait();
       orderId = 0;
@@ -267,7 +316,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
         .add64(100) // full amount
         .encrypt();
 
-      const bobBalanceBefore = await ethers.provider.getBalance(signers.bob.address);
+      const bobTokenBefore = await token.balanceOf(signers.bob.address);
 
       const tx = await contract
         .connect(signers.bob)
@@ -292,7 +341,11 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       // Verify fill record
       const fill = await contract.getFill(0);
       expect(fill.orderId).to.eq(orderId);
-      expect(fill.ethTransferred).to.eq(depositAmount);
+      expect(fill.tokenTransferred).to.eq(depositAmount);
+
+      // Bob should have received the tokens
+      const bobTokenAfter = await token.balanceOf(signers.bob.address);
+      expect(bobTokenAfter).to.eq(bobTokenBefore + depositAmount);
     });
 
     it("should fill when taker price > maker price", async function () {
@@ -405,6 +458,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("fillOrder - Encrypted Partial Fills", function () {
     it("should compute partial fill using FHE.min when taker wants less", async function () {
+      const depositAmount = 1000000n; // 1 USDC
+      await mintAndApprove(signers.alice, depositAmount);
+
       // Maker creates order for 100 units
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -422,7 +478,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -457,6 +513,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("fill amount should be capped at remaining when taker wants more", async function () {
+      const depositAmount = 500000n; // 0.5 USDC
+      await mintAndApprove(signers.alice, depositAmount);
+
       // Maker creates order for 50 units
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -474,7 +533,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("0.5") },
+            depositAmount,
           )
       ).wait();
 
@@ -517,6 +576,8 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     it("should compute encrypted total as price * fillAmount", async function () {
       const price = 1500;
       const amount = 100;
+      const depositAmount = 1000000n; // 1 USDC
+      await mintAndApprove(signers.alice, depositAmount);
 
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -534,7 +595,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -564,12 +625,14 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
   });
 
   // =========================================================================
-  //                         ETH ESCROW
+  //                         TOKEN ESCROW
   // =========================================================================
 
-  describe("ETH Escrow", function () {
-    it("ETH should be held in contract after order creation", async function () {
-      const depositAmount = ethers.parseEther("2.5");
+  describe("Token Escrow", function () {
+    it("tokens should be held in contract after order creation", async function () {
+      const depositAmount = 2500000n; // 2.5 USDC
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -586,16 +649,17 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: depositAmount },
+            depositAmount,
           )
       ).wait();
 
-      const contractBalance = await ethers.provider.getBalance(contractAddress);
+      const contractBalance = await token.balanceOf(contractAddress);
       expect(contractBalance).to.eq(depositAmount);
     });
 
-    it("ETH should transfer to taker on fill", async function () {
-      const depositAmount = ethers.parseEther("1.0");
+    it("tokens should transfer to taker on fill", async function () {
+      const depositAmount = 1000000n; // 1 USDC
+      await mintAndApprove(signers.alice, depositAmount);
 
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -613,11 +677,11 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: depositAmount },
+            depositAmount,
           )
       ).wait();
 
-      const bobBalanceBefore = await ethers.provider.getBalance(signers.bob.address);
+      const bobTokenBefore = await token.balanceOf(signers.bob.address);
 
       const takerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.bob.address)
@@ -625,30 +689,31 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
         .add64(100)
         .encrypt();
 
-      const tx = await contract
-        .connect(signers.bob)
-        .fillOrder(
-          0,
-          takerInput.handles[0],
-          takerInput.inputProof,
-          takerInput.handles[1],
-          takerInput.inputProof,
-        );
-      const receipt = await tx.wait();
-      const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
+      await (
+        await contract
+          .connect(signers.bob)
+          .fillOrder(
+            0,
+            takerInput.handles[0],
+            takerInput.inputProof,
+            takerInput.handles[1],
+            takerInput.inputProof,
+          )
+      ).wait();
 
-      const bobBalanceAfter = await ethers.provider.getBalance(signers.bob.address);
+      const bobTokenAfter = await token.balanceOf(signers.bob.address);
 
-      // Bob should have received the deposit minus gas
-      expect(bobBalanceAfter).to.eq(bobBalanceBefore + depositAmount - gasUsed);
+      // Bob should have received the deposit tokens
+      expect(bobTokenAfter).to.eq(bobTokenBefore + depositAmount);
 
       // Contract balance should be 0
-      const contractBalance = await ethers.provider.getBalance(contractAddress);
+      const contractBalance = await token.balanceOf(contractAddress);
       expect(contractBalance).to.eq(0);
     });
 
-    it("ETH should be refunded on cancel", async function () {
-      const depositAmount = ethers.parseEther("3.0");
+    it("tokens should be refunded on cancel", async function () {
+      const depositAmount = 3000000n; // 3 USDC
+      await mintAndApprove(signers.alice, depositAmount);
 
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -666,20 +731,22 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: depositAmount },
+            depositAmount,
           )
       ).wait();
 
-      const aliceBalanceBefore = await ethers.provider.getBalance(signers.alice.address);
+      const aliceTokenBefore = await token.balanceOf(signers.alice.address);
 
-      const tx = await contract.connect(signers.alice).cancelOrder(0);
-      const receipt = await tx.wait();
-      const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
+      await (await contract.connect(signers.alice).cancelOrder(0)).wait();
 
-      const aliceBalanceAfter = await ethers.provider.getBalance(signers.alice.address);
+      const aliceTokenAfter = await token.balanceOf(signers.alice.address);
 
-      // Alice should get the deposit back minus gas
-      expect(aliceBalanceAfter).to.eq(aliceBalanceBefore + depositAmount - gasUsed);
+      // Alice should get the deposit back
+      expect(aliceTokenAfter).to.eq(aliceTokenBefore + depositAmount);
+    });
+
+    it("paymentToken address should be set correctly", async function () {
+      expect(await contract.paymentToken()).to.eq(tokenAddress);
     });
   });
 
@@ -689,6 +756,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("cancelOrder", function () {
     it("maker can cancel their open order", async function () {
+      const depositAmount = 1000000n; // 1 USDC
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -705,20 +775,23 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
       await expect(contract.connect(signers.alice).cancelOrder(0))
         .to.emit(contract, "OrderCancelled")
-        .withArgs(0, ethers.parseEther("1.0"));
+        .withArgs(0, depositAmount);
 
       const order = await contract.getOrder(0);
       expect(order.status).to.eq(2); // Cancelled
-      expect(order.ethDeposit).to.eq(0);
+      expect(order.tokenDeposit).to.eq(0);
     });
 
     it("non-maker cannot cancel order", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -735,7 +808,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -743,6 +816,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("cannot cancel already filled order", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -759,7 +835,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -801,6 +877,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("Fair Tiebreaking", function () {
     it("fill should have a random priority score", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1000)
@@ -817,7 +896,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -861,6 +940,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("Encrypted Counterparty", function () {
     it("taker address should be encrypted and decryptable by maker", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -877,7 +959,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -906,6 +988,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("taker can decrypt their own encrypted address from the fill", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -922,7 +1007,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -960,6 +1045,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       // Set auditor
       await (await contract.connect(signers.deployer).setAuditor(signers.auditor.address)).wait();
 
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       // Create order
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
@@ -977,7 +1065,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             false,
             "SOL/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1036,6 +1124,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("grantAuditorAccess reverts when no auditor is set", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1052,7 +1143,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1065,6 +1156,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     it("non-owner cannot grant auditor access", async function () {
       await (await contract.connect(signers.deployer).setAuditor(signers.auditor.address)).wait();
 
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1081,7 +1175,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1098,6 +1192,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("Post-Trade Transparency", function () {
     it("fill amount should be publicly decryptable after settlement", async function () {
+      const depositAmount = 500000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1000)
@@ -1114,7 +1211,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("0.5") },
+            depositAmount,
           )
       ).wait();
 
@@ -1167,6 +1264,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("grantAccess", function () {
     it("maker can grant view access to third party", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(5000)
@@ -1183,7 +1283,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             false,
             "SOL/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1202,6 +1302,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("non-maker cannot grant access", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1218,7 +1321,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1228,6 +1331,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("cannot grant access to zero address", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const encInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1244,7 +1350,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             encInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1305,6 +1411,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
     });
 
     it("getOrderFills should return fill IDs for an order", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1321,7 +1430,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1356,6 +1465,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
   describe("Protocol Volume Tracking", function () {
     it("total volume should accumulate across fills", async function () {
       // Create and fill first order
+      const deposit1 = 500000n;
+      await mintAndApprove(signers.alice, deposit1);
+
       const maker1Input = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1000)
@@ -1372,7 +1484,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             maker1Input.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("0.5") },
+            deposit1,
           )
       ).wait();
 
@@ -1395,6 +1507,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       ).wait();
 
       // Create and fill second order
+      const deposit2 = 300000n;
+      await mintAndApprove(signers.alice, deposit2);
+
       const maker2Input = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(2000)
@@ -1411,7 +1526,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             maker2Input.inputProof,
             false,
             "BTC/USDC",
-            { value: ethers.parseEther("0.3") },
+            deposit2,
           )
       ).wait();
 
@@ -1447,6 +1562,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
 
   describe("Edge Cases", function () {
     it("fill with zero taker amount should produce zero fill", async function () {
+      const depositAmount = 1000000n;
+      await mintAndApprove(signers.alice, depositAmount);
+
       const makerInput = await fhevm
         .createEncryptedInput(contractAddress, signers.alice.address)
         .add64(1500)
@@ -1463,7 +1581,7 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
             makerInput.inputProof,
             true,
             "ETH/USDC",
-            { value: ethers.parseEther("1.0") },
+            depositAmount,
           )
       ).wait();
 
@@ -1496,15 +1614,9 @@ describe("ConfidentialOTC - Confidential Dark Pool", function () {
       expect(decFillAmount).to.eq(0);
     });
 
-    it("receive function should accept plain ETH", async function () {
-      const tx = await signers.deployer.sendTransaction({
-        to: contractAddress,
-        value: ethers.parseEther("1.0"),
-      });
-      await tx.wait();
-
-      const balance = await ethers.provider.getBalance(contractAddress);
-      expect(balance).to.eq(ethers.parseEther("1.0"));
+    it("constructor should revert with zero address token", async function () {
+      const factory = (await ethers.getContractFactory("ConfidentialOTC")) as ConfidentialOTC__factory;
+      await expect(factory.deploy(ethers.ZeroAddress)).to.be.revertedWithCustomError(contract, "ZeroAddress");
     });
   });
 });

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getContract, parseEther } from "../lib/contract";
+import { getContract, approveUSDC, getUSDCBalance, parseUnits } from "../lib/contract";
 import { encryptInputs } from "../lib/fhevm";
 import { useWallet } from "../App";
 
@@ -59,9 +59,14 @@ export default function CreateOrder() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");
-  const [ethDeposit, setEthDeposit] = useState("0.001");
+  const [usdcDeposit, setUsdcDeposit] = useState("10");
+  const [usdcBalance, setUsdcBalance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (account) getUSDCBalance(account).then(setUsdcBalance).catch(() => {});
+  }, [account]);
 
   const currentStep = computeStep(pair, price, amount, submitting);
 
@@ -84,9 +89,13 @@ export default function CreateOrder() {
     try {
       setSubmitting(true);
 
-      // Encrypt price and amount using fhEVM
+      // Step 1: Approve USDC
+      await approveUSDC(usdcDeposit);
+
+      // Step 2: Encrypt price and amount using fhEVM
       const encrypted = await encryptInputs(account, priceNum, amountNum);
 
+      // Step 3: Create order with USDC deposit
       const contract = await getContract(true);
       const tx = await contract.createOrder(
         encrypted.handles[0],
@@ -95,7 +104,7 @@ export default function CreateOrder() {
         encrypted.inputProof,
         side === "buy",
         pair,
-        { value: parseEther(ethDeposit) },
+        parseUnits(usdcDeposit, 6),
       );
       await tx.wait();
       navigate("/");
@@ -295,19 +304,24 @@ export default function CreateOrder() {
                 <span className="font-medium text-slate-200">${Number(price).toLocaleString()} {pair.split("/")[1]}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-400">ETH Escrow</span>
+                <span className="text-slate-400">USDC Deposit</span>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    value={ethDeposit}
-                    onChange={(e) => setEthDeposit(e.target.value)}
-                    step="0.001"
-                    min="0.0001"
+                    value={usdcDeposit}
+                    onChange={(e) => setUsdcDeposit(e.target.value)}
+                    step="1"
+                    min="1"
                     className="w-24 text-right bg-[#0d1117] border border-[#1e293b] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500/50"
                   />
-                  <span className="text-slate-400 text-xs">ETH</span>
+                  <span className="text-slate-400 text-xs">USDC</span>
                 </div>
               </div>
+              {usdcBalance && (
+                <div className="text-xs text-slate-500 text-right">
+                  Balance: {Number(usdcBalance).toLocaleString()} USDC
+                </div>
+              )}
               <div className="h-px bg-[#1e293b]" />
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-400">Total Value</span>
