@@ -18,6 +18,7 @@ export default function MyTrades() {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [grantModal, setGrantModal] = useState<{ orderId: number; address: string } | null>(null);
   const [grantSuccess, setGrantSuccess] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
     if (account) loadMyOrders();
@@ -260,202 +261,94 @@ export default function MyTrades() {
           <div className="text-slate-500 text-sm">Create or fill an order to see it here.</div>
         </div>
       ) : (
-        <div className="space-y-4">
-          {orders.map((o, idx) => (
-            <div
-              key={o.id}
-              className="bg-[#111827] border border-[#1e293b] rounded-xl overflow-hidden gradient-border row-enter hover:border-blue-500/10 transition-colors duration-300"
-              style={{ animationDelay: `${idx * 60}ms` }}
-            >
-              <div className="p-5 sm:p-6">
-                {/* Top row: ID, pair, side, status, role */}
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-xs text-slate-500 bg-[#0d1117] px-2 py-0.5 rounded">#{o.id}</span>
-                    <span className="font-bold text-slate-100">{o.tokenPair}</span>
-                    <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
-                      o.isBuy
-                        ? "bg-emerald-500/10 text-emerald-400"
-                        : "bg-red-500/10 text-red-400"
-                    }`}>
-                      {o.isBuy ? "BUY" : "SELL"}
-                    </span>
-                    <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
-                      o.status === 0
-                        ? "bg-emerald-500/10 text-emerald-400 status-open"
-                        : o.status === 1
-                          ? "bg-blue-500/10 text-blue-400"
-                          : "bg-slate-500/10 text-slate-500"
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        o.status === 0 ? "bg-emerald-400" : o.status === 1 ? "bg-blue-400" : "bg-slate-500"
-                      }`} />
-                      {["Open", "Filled", "Cancelled"][o.status]}
-                    </span>
-                  </div>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                    o.maker.toLowerCase() === account.toLowerCase()
-                      ? "bg-purple-500/10 text-purple-400 border border-purple-500/20"
-                      : "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
-                  }`}>
-                    {o.maker.toLowerCase() === account.toLowerCase() ? "Maker" : "Taker"}
-                  </span>
-                </div>
-
-                {/* Deposits info */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">ETH Deposit</div>
-                    <div className="text-sm font-medium text-slate-300">
-                      {Number(o.ethDeposit).toFixed(4)} <span className="text-slate-500">ETH</span>
-                    </div>
-                    <div className="text-[10px] text-slate-600 mt-0.5">
-                      Remaining: {Number(o.ethRemaining).toFixed(4)}
-                    </div>
-                  </div>
-                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">USDC Deposit</div>
-                    <div className="text-sm font-medium text-slate-300">
-                      {Number(o.tokenDeposit).toLocaleString()} <span className="text-slate-500">USDC</span>
-                    </div>
-                    <div className="text-[10px] text-slate-600 mt-0.5">
-                      Remaining: {Number(o.tokenRemaining).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Price & Amount (encrypted) */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">Price</div>
-                    {o.decryptedPrice !== undefined ? (
-                      <div className={`text-xl font-bold text-emerald-400 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>
-                        ${o.decryptedPrice.toLocaleString()}
-                      </div>
-                    ) : (
-                      <div className="encrypted-badge inline-flex items-center gap-1.5 border border-blue-500/20 rounded-md px-2.5 py-1 text-xs text-blue-300/80">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                        Encrypted
-                      </div>
-                    )}
-                  </div>
-                  <div className="bg-[#0d1117] rounded-lg p-3 border border-[#1e293b]/50">
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">Amount</div>
-                    {o.decryptedAmount !== undefined ? (
-                      <div className={`text-xl font-bold text-emerald-400 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>
-                        {o.decryptedAmount.toLocaleString()} <span className="text-sm text-slate-400">{o.tokenPair.split("/")[0]}</span>
-                      </div>
-                    ) : (
-                      <div className="encrypted-badge inline-flex items-center gap-1.5 border border-blue-500/20 rounded-md px-2.5 py-1 text-xs text-blue-300/80">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                        Encrypted
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Decrypt button */}
-                {o.decryptedPrice === undefined && (
-                  <button
-                    onClick={() => handleDecrypt(o.id)}
-                    disabled={o.decrypting}
-                    className="w-full bg-gradient-to-r from-[#0d1117] to-[#111827] hover:from-blue-500/10 hover:to-blue-500/5 border border-[#1e293b] hover:border-blue-500/30 text-slate-300 py-3 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-50 cursor-pointer group"
-                  >
-                    {o.decrypting ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <span className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full spinner" />
-                        <span className="text-blue-400">Decrypting...</span>
-                      </span>
-                    ) : (
-                      <span className="flex items-center justify-center gap-2 group-hover:text-blue-400 transition-colors">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                          <path d="M7 11V7a5 5 0 019.9-1"/>
-                        </svg>
-                        Decrypt Details
-                      </span>
-                    )}
-                  </button>
-                )}
-
-                {/* Total value (after decrypt) */}
-                {o.decryptedPrice !== undefined && o.decryptedAmount !== undefined && (
-                  <div className={`flex justify-between items-center text-sm pt-3 mt-1 border-t border-[#1e293b]/50 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>
-                    <span className="text-slate-400">Total Value</span>
-                    <span className="font-bold text-lg text-blue-400">
-                      ${(o.decryptedPrice * o.decryptedAmount).toLocaleString()} <span className="text-xs text-slate-500">{o.tokenPair.split("/")[1]}</span>
-                    </span>
-                  </div>
-                )}
-
-                {/* Grant Access + Share Link buttons for maker's open orders */}
-                {o.maker.toLowerCase() === account.toLowerCase() && o.status === 0 && (
-                  <div className="flex gap-3 mt-4 pt-4 border-t border-[#1e293b]/50">
-                    <button
-                      onClick={() => setGrantModal({ orderId: o.id, address: "" })}
-                      disabled={grantingAccess === o.id}
-                      className="flex-1 flex items-center justify-center gap-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 hover:border-purple-500/40 text-purple-400 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
-                    >
-                      {grantingAccess === o.id ? (
-                        <>
-                          <span className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full spinner" />
-                          Granting...
-                        </>
-                      ) : (
-                        <>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
-                          </svg>
-                          Grant Access
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleShareLink(o.id)}
-                      className="flex-1 flex items-center justify-center gap-2 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer"
-                    >
-                      {copiedId === o.id ? (
-                        <>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12"/>
-                          </svg>
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-                            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-                          </svg>
-                          Share Link
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Counterparty info */}
-                {o.status === 1 && (
-                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-[#1e293b]/50 text-xs text-slate-500">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
-                    </svg>
-                    <span>
-                      Counterparty: <span className="font-mono text-slate-400">Encrypted (eaddress)</span>
-                    </span>
-                  </div>
-                )}
-
-                {/* Timestamp */}
-                <div className="flex items-center gap-2 mt-2 text-xs text-slate-600">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                  </svg>
-                  {new Date(o.createdAt * 1000).toLocaleString()}
-                </div>
+        <div className="border border-[#1e293b] rounded-xl overflow-hidden gradient-border">
+          {orders.map((o, idx) => {
+            const isExpanded = expandedId === o.id;
+            const isMaker = o.maker.toLowerCase() === account.toLowerCase();
+            const deposit = o.isBuy ? `${Number(o.tokenDeposit).toLocaleString()} USDC` : `${Number(o.ethDeposit).toFixed(4)} ETH`;
+            return (
+            <div key={o.id} className={`${idx > 0 ? "border-t border-[#1e293b]" : ""} row-enter`} style={{ animationDelay: `${idx * 40}ms` }}>
+              {/* Compact row */}
+              <div
+                onClick={() => setExpandedId(isExpanded ? null : o.id)}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-[#1a2235]/50 cursor-pointer transition-colors"
+              >
+                <span className="font-mono text-xs text-slate-500 w-8">#{o.id}</span>
+                <span className="font-medium text-sm text-slate-200 w-24">{o.tokenPair}</span>
+                <span className={`text-xs font-bold w-12 ${o.isBuy ? "text-emerald-400" : "text-red-400"}`}>{o.isBuy ? "BUY" : "SELL"}</span>
+                <span className="text-xs text-slate-400 w-28">{deposit}</span>
+                <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${
+                  o.status === 0 ? "bg-emerald-500/10 text-emerald-400" : o.status === 1 ? "bg-blue-500/10 text-blue-400" : "bg-slate-500/10 text-slate-500"
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${o.status === 0 ? "bg-emerald-400" : o.status === 1 ? "bg-blue-400" : "bg-slate-500"}`} />
+                  {["Open", "Filled", "Cancelled"][o.status]}
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ml-auto ${isMaker ? "bg-purple-500/10 text-purple-400" : "bg-cyan-500/10 text-cyan-400"}`}>
+                  {isMaker ? "Maker" : "Taker"}
+                </span>
+                <svg className={`w-4 h-4 text-slate-500 transition-transform ${isExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
               </div>
+
+              {/* Expanded detail */}
+              {isExpanded && (
+                <div className="px-4 pb-4 pt-1 bg-[#0d1117]/50 border-t border-[#1e293b]/50 space-y-3 page-fade-in">
+                  {/* Price & Amount */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-[#111827] rounded-lg p-3 border border-[#1e293b]/50">
+                      <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Price</div>
+                      {o.decryptedPrice !== undefined ? (
+                        <div className={`text-lg font-bold text-emerald-400 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>${o.decryptedPrice.toLocaleString()}</div>
+                      ) : (
+                        <div className="encrypted-badge inline-flex items-center gap-1.5 border border-blue-500/20 rounded px-2 py-0.5 text-xs text-blue-300/80">🔒 Encrypted</div>
+                      )}
+                    </div>
+                    <div className="bg-[#111827] rounded-lg p-3 border border-[#1e293b]/50">
+                      <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Amount</div>
+                      {o.decryptedAmount !== undefined ? (
+                        <div className={`text-lg font-bold text-emerald-400 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>{o.decryptedAmount} {o.tokenPair.split("/")[0]}</div>
+                      ) : (
+                        <div className="encrypted-badge inline-flex items-center gap-1.5 border border-blue-500/20 rounded px-2 py-0.5 text-xs text-blue-300/80">🔒 Encrypted</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Total value */}
+                  {o.decryptedPrice !== undefined && o.decryptedAmount !== undefined && (
+                    <div className={`flex justify-between items-center text-sm bg-[#111827] rounded-lg p-3 border border-[#1e293b]/50 ${o.justDecrypted ? "decrypt-reveal" : ""}`}>
+                      <span className="text-slate-400">Total Value</span>
+                      <span className="font-bold text-blue-400">${(o.decryptedPrice * o.decryptedAmount).toLocaleString()}</span>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex gap-2">
+                    {o.decryptedPrice === undefined && (
+                      <button onClick={() => handleDecrypt(o.id)} disabled={o.decrypting}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-blue-400 py-2 rounded-lg text-xs font-medium transition cursor-pointer disabled:opacity-50">
+                        {o.decrypting ? <><span className="w-3 h-3 border-2 border-blue-400/30 border-t-blue-400 rounded-full spinner"/>Decrypting...</> : "🔓 Decrypt"}
+                      </button>
+                    )}
+                    {isMaker && o.status === 0 && (
+                      <>
+                        <button onClick={() => setGrantModal({ orderId: o.id, address: "" })}
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400 py-2 rounded-lg text-xs font-medium transition cursor-pointer">
+                          Grant Access
+                        </button>
+                        <button onClick={() => handleShareLink(o.id)}
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 text-cyan-400 py-2 rounded-lg text-xs font-medium transition cursor-pointer">
+                          {copiedId === o.id ? "✓ Copied!" : "Share Link"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Timestamp */}
+                  <div className="text-[10px] text-slate-600">{new Date(o.createdAt * 1000).toLocaleString()}</div>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
