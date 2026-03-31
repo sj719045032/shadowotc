@@ -430,14 +430,16 @@ export default function Vault() {
   }, [loadBalances, loadEncryptedHandles, refreshPendingUnwraps]);
 
   // Load transfer history when token or account changes
-  useEffect(() => {
-    if (!account) { setTransfers([]); return; }
+  const refreshHistory = useCallback(() => {
+    if (!account) { setTransfers([]); return Promise.resolve(); }
     setTransfersLoading(true);
-    getTransferHistory(account as `0x${string}`, selectedToken)
+    return getTransferHistory(account as `0x${string}`, selectedToken)
       .then(setTransfers)
       .catch(() => setTransfers([]))
       .finally(() => setTransfersLoading(false));
   }, [account, selectedToken]);
+
+  useEffect(() => { refreshHistory(); }, [refreshHistory]);
 
   async function handleDecryptHistory() {
     if (!account || transfers.length === 0) return;
@@ -572,7 +574,7 @@ export default function Vault() {
       if (showModal) updateStep(1, "done");
 
       setPendingUnwraps((prev) => prev.filter((entry) => entry.handle.toLowerCase() !== item.handle.toLowerCase()));
-      await Promise.all([loadBalances(), loadEncryptedHandles()]);
+      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshHistory()]);
       if (item.token === "ETH") {
         setCwethDecrypted(null);
       } else {
@@ -617,7 +619,7 @@ export default function Vault() {
       updateStep(1, "done");
 
       // Refresh balances
-      await Promise.all([loadBalances(), loadEncryptedHandles()]);
+      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshHistory()]);
       setCwethDecrypted(null);
     } catch (err: unknown) {
       console.error(err);
@@ -694,7 +696,7 @@ export default function Vault() {
       updateStep(5, "done");
 
       setPendingUnwraps((prev) => prev.filter((item) => item.handle.toLowerCase() !== handle.toLowerCase()));
-      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshPendingUnwraps()]);
+      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshPendingUnwraps(), refreshHistory()]);
       setCwethDecrypted(null);
     } catch (err: unknown) {
       console.error(err);
@@ -745,7 +747,7 @@ export default function Vault() {
       await waitTx(wrapHash);
       updateStep(2, "done");
 
-      await Promise.all([loadBalances(), loadEncryptedHandles()]);
+      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshHistory()]);
       setCusdcDecrypted(null);
     } catch (err: unknown) {
       console.error(err);
@@ -822,7 +824,7 @@ export default function Vault() {
       updateStep(5, "done");
 
       setPendingUnwraps((prev) => prev.filter((item) => item.handle.toLowerCase() !== handle.toLowerCase()));
-      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshPendingUnwraps()]);
+      await Promise.all([loadBalances(), loadEncryptedHandles(), refreshPendingUnwraps(), refreshHistory()]);
       setCusdcDecrypted(null);
     } catch (err: unknown) {
       console.error(err);
@@ -909,16 +911,26 @@ export default function Vault() {
       {account && (
         <div className="max-w-lg mx-auto">
           {/* Token selector */}
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-3 mb-4">
             <span className="text-xs text-slate-500 uppercase tracking-wider">Token</span>
-            <select
-              value={selectedToken}
-              onChange={(e) => setSelectedToken(e.target.value as "ETH" | "USDC")}
-              className="bg-[#111827] border border-[#1e293b] text-slate-200 text-sm font-medium rounded-lg px-4 py-2 focus:outline-none focus:border-blue-500/50 transition cursor-pointer"
-            >
-              <option value="ETH">ETH ↔ cWETH</option>
-              <option value="USDC">USDC ↔ cUSDC</option>
-            </select>
+            <div className="flex rounded-lg border border-[#1e293b] overflow-hidden">
+              <button
+                onClick={() => setSelectedToken("ETH")}
+                className={`px-4 py-2 text-sm font-medium transition cursor-pointer ${
+                  selectedToken === "ETH"
+                    ? "bg-blue-500/20 text-blue-400 border-r border-blue-500/30"
+                    : "bg-[#111827] text-slate-400 border-r border-[#1e293b] hover:bg-[#1e293b]"
+                }`}
+              >ETH ↔ cWETH</button>
+              <button
+                onClick={() => setSelectedToken("USDC")}
+                className={`px-4 py-2 text-sm font-medium transition cursor-pointer ${
+                  selectedToken === "USDC"
+                    ? "bg-blue-500/20 text-blue-400"
+                    : "bg-[#111827] text-slate-400 hover:bg-[#1e293b]"
+                }`}
+              >USDC ↔ cUSDC</button>
+            </div>
           </div>
 
           {/* Active card */}

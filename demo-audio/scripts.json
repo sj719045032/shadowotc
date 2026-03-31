@@ -1,0 +1,52 @@
+{
+  "sections": [
+    {
+      "id": "01_intro",
+      "text": "Hi, this is ShadowOTC, a confidential OTC dark pool powered by Zama's fhEVM. Every price, amount, and counterparty identity is encrypted on-chain using Fully Homomorphic Encryption. No one, not even validators, can see your trading data. Let me walk you through the full workflow."
+    },
+    {
+      "id": "02_vault_wrap",
+      "text": "First, we wrap tokens in the Confidential Vault. I select ETH and enter an amount to wrap. This converts standard ETH into confidential cWETH, an ERC-7984 token with encrypted balances. The wrap transaction stores the balance in 6-decimal FHE precision."
+    },
+    {
+      "id": "03_vault_decrypt",
+      "text": "After wrapping, the balance shows as Encrypted. I click Decrypt, which requires one wallet signature to generate a temporary decryption key. This decrypts all token balances at once. Now I can see my confidential cWETH and cUSDC balances."
+    },
+    {
+      "id": "04_create_order",
+      "text": "Now let's create a sell order. I go to Create Order, set the price and amount. These values will be encrypted with FHE before submission, so nobody on-chain can see the trading terms. I click Create, and the encrypted order is stored on-chain with my cWETH deposited as collateral."
+    },
+    {
+      "id": "05_taker_view",
+      "text": "Switching to the taker's perspective. In the Order Book, I can see the order, but the price and amount show as Encrypted. My orders are labeled in purple, while fillable orders show a green Fill Order button. I click to view the order detail."
+    },
+    {
+      "id": "06_request_access",
+      "text": "Before I can see the order terms, I need to request access from the maker. The maker reviews the request and grants me view permission through the ACL system. This selective disclosure is a key privacy feature."
+    },
+    {
+      "id": "07_decrypt_order",
+      "text": "Now that access is granted, I click Decrypt Order Details. With just one wallet signature, the system decrypts the order price, amount, and my token balance simultaneously. The settlement preview shows what I'll pay, what I'll receive, and whether my balance is sufficient."
+    },
+    {
+      "id": "08_fill_order",
+      "text": "Everything looks good. I click Fill Order. The process has four steps. First, my bid is encrypted with FHE. Second, the fill transaction is submitted. This escrows my payment tokens and runs 15 FHE operations on-chain for encrypted price matching. Third, the Zama Gateway decrypts the match result. Fourth, the settlement executes the token swap."
+    },
+    {
+      "id": "09_settlement",
+      "text": "The trade settled successfully. The maker received cUSDC and the taker received cWETH. The maker's payment goes through an encrypted confidential transfer from, keeping the fill amount private on-chain. The taker's payment uses a plaintext deposit transfer since that amount was already public."
+    },
+    {
+      "id": "10_history",
+      "text": "Back in the Vault, I can view the full transfer history for each token. Each transaction shows the direction: Wrap, Unwrap, Sent, or Received, along with the counterparty. Transfer amounts are encrypted by default. I click Decrypt Amounts, and with one signature, all historical amounts are batch-decrypted."
+    },
+    {
+      "id": "11_architecture",
+      "text": "Let me highlight the key technical decisions. All tokens use unified 6-decimal FHE precision, eliminating conversion bugs at the settlement layer. Taker tokens are escrowed during fill initiation, so cancelled fills are safely refunded. And interrupted fills can be recovered from the order detail page."
+    },
+    {
+      "id": "12_closing",
+      "text": "ShadowOTC demonstrates a complete confidential trading workflow. From encrypted order creation, to FHE price matching, to Gateway-verified settlement. It uses 17 FHE operations, ERC-7984 confidential tokens, and real Zama Gateway integration. All deployed on Sepolia testnet. Thank you for watching."
+    }
+  ]
+}
