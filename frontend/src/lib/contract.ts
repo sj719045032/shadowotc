@@ -322,6 +322,64 @@ export async function getAccessStatus(orderId: number): Promise<AccessStatus> {
 
 // ─── Pending fill recovery ────────────────────────────────────
 
+// ─── Token transfer history ───────────────────────────────────
+
+export type TransferRecord = {
+  token: "ETH" | "USDC";
+  direction: "wrap" | "unwrap" | "in" | "out";
+  from: `0x${string}`;
+  to: `0x${string}`;
+  amountHandle: `0x${string}`;
+  txHash: `0x${string}`;
+  blockNumber: bigint;
+  timestamp?: number;
+  decryptedAmount?: number;
+};
+
+export async function getTransferHistory(
+  userAddress: `0x${string}`,
+  token: "ETH" | "USDC",
+): Promise<TransferRecord[]> {
+  const client = getPublicClient(config);
+  const contractAddress = token === "ETH" ? CWETH_ADDRESS : CUSDC_ADDRESS;
+  const fromBlock = token === "ETH" ? CWETH_DEPLOY_BLOCK : CUSDC_DEPLOY_BLOCK;
+  if (!contractAddress) return [];
+
+  const transferEvent = parseAbiItem("event ConfidentialTransfer(address indexed from, address indexed to, bytes32 indexed amount)");
+  const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
+
+  const [outLogs, inLogs] = await Promise.all([
+    client.getLogs({ address: contractAddress, event: transferEvent, args: { from: userAddress }, fromBlock, toBlock: "latest" }),
+    client.getLogs({ address: contractAddress, event: transferEvent, args: { to: userAddress }, fromBlock, toBlock: "latest" }),
+  ]);
+
+  // Deduplicate (wrap mint: from=0x0,to=user appears in inLogs; self-transfers appear in both)
+  const seen = new Set<string>();
+  const records: TransferRecord[] = [];
+
+  for (const log of [...outLogs, ...inLogs]) {
+    const key = `${log.transactionHash}-${log.logIndex}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const from = (log.args.from || ZERO_ADDR) as `0x${string}`;
+    const to = (log.args.to || ZERO_ADDR) as `0x${string}`;
+    const handle = (log.args.amount || "0x") as `0x${string}`;
+
+    let direction: TransferRecord["direction"];
+    if (from === ZERO_ADDR) direction = "wrap";
+    else if (to === ZERO_ADDR) direction = "unwrap";
+    else if (to.toLowerCase() === userAddress.toLowerCase()) direction = "in";
+    else direction = "out";
+
+    records.push({ token, direction, from, to, amountHandle: handle, txHash: log.transactionHash, blockNumber: log.blockNumber });
+  }
+
+  return records.sort((a, b) => Number(b.blockNumber - a.blockNumber));
+}
+
+// ─── Pending fill recovery ────────────────────────────────────
+
 export type PendingFillInfo = {
   pendingFillId: number;
   orderId: number;

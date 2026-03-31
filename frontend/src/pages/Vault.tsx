@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getETHBalance,
   getUSDCBalance,
+  CONTRACT_ADDRESS,
   CWETH_ADDRESS,
   CUSDC_ADDRESS,
   parseUnits,
@@ -13,7 +14,9 @@ import {
   usdcAllowance,
   waitTx,
   getPendingUnwraps,
+  getTransferHistory,
   type PendingUnwrap,
+  type TransferRecord,
   ZERO_FHE_HANDLE,
 } from "../lib/contract";
 import { getAccount } from "@wagmi/core";
@@ -361,6 +364,11 @@ export default function Vault() {
   const [txError, setTxError] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedToken, setSelectedToken] = useState<"ETH" | "USDC">("ETH");
+
+  // Transfer history
+  const [transfers, setTransfers] = useState<TransferRecord[]>([]);
+  const [transfersLoading, setTransfersLoading] = useState(false);
+  const [decryptingHistory, setDecryptingHistory] = useState(false);
   const [pendingUnwraps, setPendingUnwraps] = useState<PendingUnwrapItem[]>([]);
 
   // ---- Load plaintext balances ----
@@ -420,6 +428,41 @@ export default function Vault() {
     loadEncryptedHandles();
     refreshPendingUnwraps();
   }, [loadBalances, loadEncryptedHandles, refreshPendingUnwraps]);
+
+  // Load transfer history when token or account changes
+  useEffect(() => {
+    if (!account) { setTransfers([]); return; }
+    setTransfersLoading(true);
+    getTransferHistory(account as `0x${string}`, selectedToken)
+      .then(setTransfers)
+      .catch(() => setTransfers([]))
+      .finally(() => setTransfersLoading(false));
+  }, [account, selectedToken]);
+
+  async function handleDecryptHistory() {
+    if (!account || transfers.length === 0) return;
+    const handles = transfers
+      .filter((t) => t.amountHandle && t.amountHandle !== "0x" && !t.decryptedAmount)
+      .map((t) => ({
+        handle: t.amountHandle,
+        contractAddress: (t.token === "ETH" ? CWETH_ADDRESS : CUSDC_ADDRESS) as string,
+      }));
+    if (handles.length === 0) return;
+    setDecryptingHistory(true);
+    try {
+      const results = await decryptValues(handles, account);
+      setTransfers((prev) =>
+        prev.map((t) => {
+          const val = results.get(t.amountHandle);
+          return val !== undefined ? { ...t, decryptedAmount: Number(val) / 1e6 } : t;
+        }),
+      );
+    } catch (err) {
+      console.error("Failed to decrypt history:", err);
+    } finally {
+      setDecryptingHistory(false);
+    }
+  }
 
   // ---- Decrypt all balances in one signing request ----
   async function handleDecryptAll() {
@@ -901,6 +944,82 @@ export default function Vault() {
             items={pendingUnwraps.filter((item) => item.token === selectedToken)}
             onFinalize={(item) => { void finalizePendingUnwrap(item); }}
           />
+        </div>
+      )}
+
+      {/* Transfer History */}
+      {account && (
+        <div className="max-w-lg mx-auto mt-6">
+          <div className="bg-[#111827] border border-[#1e293b] rounded-2xl overflow-hidden gradient-border">
+            <div className="px-5 py-4 border-b border-[#1e293b] flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                {selectedToken === "ETH" ? "cWETH" : "cUSDC"} History
+                {!transfersLoading && transfers.length > 0 && ` (${transfers.length})`}
+              </h3>
+              {transfers.length > 0 && !transfers.every((t) => t.decryptedAmount !== undefined) && (
+                <button
+                  onClick={handleDecryptHistory}
+                  disabled={decryptingHistory}
+                  className="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors disabled:text-slate-600 disabled:no-underline cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {decryptingHistory ? "Decrypting..." : "Decrypt Amounts"}
+                </button>
+              )}
+            </div>
+            <div className="px-5 py-3">
+              {transfersLoading ? (
+                <div className="flex items-center justify-center py-4">
+                  <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full spinner" />
+                </div>
+              ) : transfers.length === 0 ? (
+                <div className="text-xs text-slate-600 py-2">No transactions yet</div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {transfers.map((t, i) => {
+                    const dirLabel = t.direction === "wrap" ? "Wrap" : t.direction === "unwrap" ? "Unwrap" : t.direction === "in" ? "Received" : "Sent";
+                    const dirColor = t.direction === "wrap" || t.direction === "in" ? "text-emerald-400" : "text-red-400";
+                    const dirSign = t.direction === "wrap" || t.direction === "in" ? "+" : "-";
+                    const otcAddr = CONTRACT_ADDRESS.toLowerCase();
+                    const rawAddr = t.direction === "wrap" ? "" : t.direction === "unwrap" ? "" : t.direction === "in" ? t.from : t.to;
+                    const counterparty = t.direction === "wrap" ? "Mint"
+                      : t.direction === "unwrap" ? "Burn"
+                      : rawAddr.toLowerCase() === otcAddr ? "OTC Contract"
+                      : `${rawAddr.slice(0, 6)}...${rawAddr.slice(-4)}`;
+                    return (
+                      <div key={`${t.txHash}-${i}`} className="flex items-center justify-between py-2 border-b border-[#1e293b]/30 last:border-0">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-medium ${dirColor}`}>{dirLabel}</span>
+                            {counterparty !== "Mint" && counterparty !== "Burn" && (
+                              <span className={`text-[10px] font-mono ${counterparty === "OTC Contract" ? "text-purple-400" : "text-slate-600"}`}>
+                                {counterparty}
+                              </span>
+                            )}
+                          </div>
+                          <a href={`https://sepolia.etherscan.io/tx/${t.txHash}`} target="_blank" rel="noopener noreferrer"
+                            className="text-[10px] text-slate-600 hover:text-blue-400 font-mono transition-colors">
+                            Tx {t.txHash.slice(0, 10)}...{t.txHash.slice(-4)}
+                          </a>
+                        </div>
+                        <div className="text-right">
+                          {t.decryptedAmount !== undefined ? (
+                            <span className={`text-sm font-medium ${dirColor}`}>
+                              {dirSign}{t.decryptedAmount.toLocaleString()} c{selectedToken === "ETH" ? "WETH" : "USDC"}
+                            </span>
+                          ) : (
+                            <span className="encrypted-badge inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] text-blue-400 border border-blue-500/20">
+                              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                              Encrypted
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
