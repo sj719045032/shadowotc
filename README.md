@@ -24,33 +24,62 @@ ShadowOTC uses FHE-encrypted price matching with two-phase settlement to keep ev
 
 ## Architecture
 
+```mermaid
+graph TD
+    User["User (Browser)"]
+    FE["Frontend<br/>React + fhevmjs SDK"]
+    OTC["ConfidentialOTC<br/>Solidity + FHE"]
+    GW["Zama KMS Gateway<br/>Decryption Relay"]
+    CWETH["cWETH (ERC-7984)<br/>6-dec encrypted"]
+    CUSDC["cUSDC (ERC-7984)<br/>6-dec encrypted"]
+    ETH["ETH<br/>18 decimals"]
+    USDC["USDC<br/>6 decimals"]
+
+    User -->|Wallet connect| FE
+    FE -->|Encrypt inputs| OTC
+    FE -->|Decrypt values| GW
+    GW <-->|Proof verification| OTC
+    OTC -->|depositFrom / confidentialTransferFrom| CWETH
+    OTC -->|depositFrom / confidentialTransferFrom| CUSDC
+    ETH -->|"Wrap (÷ 1e12)"| CWETH
+    USDC -->|"Wrap (rate=1)"| CUSDC
+
+    style OTC fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    style CWETH fill:#1a2e1a,stroke:#22c55e,color:#fff
+    style CUSDC fill:#1a2e1a,stroke:#22c55e,color:#fff
+    style GW fill:#3b1f3b,stroke:#a855f7,color:#fff
+    style FE fill:#1e293b,stroke:#60a5fa,color:#fff
 ```
-                          +------------------+
-                          |   Frontend (React)|
-                          |   fhevmjs SDK    |
-                          +--------+---------+
-                                   |
-                    +--------------+--------------+
-                    |                             |
-              Encrypt inputs              Decrypt values
-              (FHE client-side)           (Gateway relay)
-                    |                             |
-                    v                             v
-            +-------+--------+          +---------+--------+
-            | ConfidentialOTC |          | Zama KMS Gateway |
-            | (Solidity+FHE)  |<-------->| (Decryption relay)|
-            +---+--------+---+          +------------------+
-                |        |
-        +-------+        +-------+
-        v                        v
-  +-----+------+          +------+-----+
-  | cWETH      |          | cUSDC      |
-  | (ERC-7984) |          | (ERC-7984) |
-  | 6-dec FHE  |          | 6-dec FHE  |
-  +-----+------+          +------+-----+
-        |                        |
-   Wrap ETH                 Wrap USDC
-   (18 dec -> 6 dec)        (6 dec, rate=1)
+
+### Trade Flow
+
+```mermaid
+sequenceDiagram
+    participant Maker
+    participant Taker
+    participant OTC as ConfidentialOTC
+    participant GW as Zama Gateway
+
+    Maker->>OTC: createOrder(encPrice, encAmount, deposit)
+    Note over OTC: Escrow cWETH/cUSDC
+
+    Taker->>Maker: requestAccess(orderId)
+    Maker->>OTC: grantAccess(orderId, taker)
+    Taker->>GW: Decrypt order terms (EIP-712 sign)
+    GW-->>Taker: price, amount (plaintext)
+
+    Taker->>OTC: initiateFill(encBidPrice, encBidAmount)
+    Note over OTC: Escrow taker tokens<br/>FHE matching (15 ops)<br/>Mark for public decrypt
+
+    Taker->>GW: publicDecrypt(priceMatch, effectiveFill)
+    GW-->>Taker: decrypted values + KMS proof
+
+    Taker->>OTC: settleFill(proof)
+    alt Price matched
+        Note over OTC: cWETH→Taker (encrypted)<br/>cUSDC→Maker (plaintext)
+    else Price mismatch
+        Note over OTC: Refund taker escrow<br/>Restore remainingAmount
+    end
 ```
 
 ### Unified 6-Decimal FHE Precision
